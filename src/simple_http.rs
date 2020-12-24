@@ -2,51 +2,55 @@ use std::io;
 use std::io::Write;
 use std::net::TcpStream;
 
+pub enum HttpMethod {
+    GET,
+    HEAD,
+}
+
 pub enum HttpStatus {
     OK,                      // 200
     BadRequest,              // 401
     PermissionDenied,        // 403
     NotFound,                // 404
     RequestHeadersTooLarge,  // 431
+    ServerError,             // 500
     NotImplemented,          // 501
     HttpVersionNotSupported, // 505
 }
 
-fn status_to_code(status: &HttpStatus) -> u16 {
+pub fn status_to_code(status: &HttpStatus) -> u16 {
     match status {
         HttpStatus::OK                      => 200,
         HttpStatus::BadRequest              => 401,
         HttpStatus::PermissionDenied        => 403,
         HttpStatus::NotFound                => 404,
         HttpStatus::RequestHeadersTooLarge  => 431,
+        HttpStatus::ServerError             => 500,
         HttpStatus::NotImplemented          => 501,
         HttpStatus::HttpVersionNotSupported => 505
     }
 }
 
-fn status_to_message(status: &HttpStatus) -> &'static str {
+pub fn status_to_message(status: &HttpStatus) -> &'static str {
     match status {
         HttpStatus::OK                      => "OK",
         HttpStatus::BadRequest              => "Bad request",
         HttpStatus::PermissionDenied        => "Permission denied",
         HttpStatus::NotFound                => "Not found",
         HttpStatus::RequestHeadersTooLarge  => "Request header fields too large",
+        HttpStatus::ServerError             => "Server error",
         HttpStatus::NotImplemented          => "Method not implemented",
         HttpStatus::HttpVersionNotSupported => "HTTP version not supported"
     }
 }
 
 pub struct HttpRequest<'a> {
-    method: &'a str,
-    path: &'a str,
-    version_str: &'a str,
+    pub path: &'a str,
+    pub method: Option<HttpMethod>,
+    pub version_str: &'a str,
 }
 
 impl HttpRequest<'_> {
-    pub fn version(&self) -> &str {
-        self.version_str
-    }
-
     pub fn new(request_str: &str) -> Result<HttpRequest, HttpStatus> {
         /* GET /path/to/file HTTP/1.1
          * Header: value
@@ -62,10 +66,6 @@ impl HttpRequest<'_> {
         let path = first[1];
         let version_str = first[2];
 
-        if verb != "GET" && verb != "HEAD" {
-            return Err(HttpStatus::NotImplemented);
-        }
-
         if version_str != "HTTP/1.0" && version_str != "HTTP/1.1" {
             return Err(HttpStatus::HttpVersionNotSupported);
         }
@@ -76,15 +76,21 @@ impl HttpRequest<'_> {
             return Err(HttpStatus::RequestHeadersTooLarge);
         }
 
+        let method = if verb == "GET" { Some(HttpMethod::GET) }
+                     else if verb == "HEAD" { Some(HttpMethod::HEAD) }
+                     else { None };
+
         Ok(HttpRequest {
             path: path,
-            method: verb,
+            method: method,
             version_str: version_str,
         })
     }
 }
 
 pub struct HttpHeader {
+    key: String,
+    value: String,
 }
 
 pub struct HttpResponse<'a, 'b> {
@@ -104,6 +110,14 @@ impl HttpResponse<'_, '_> {
         }
     }
 
+    pub fn add_header(&mut self, key: String, value: String) {
+        self.headers.push(HttpHeader{ key: key, value: value });
+    }
+
+    pub fn set_content_length(&mut self, size: usize) {
+        self.headers.push(HttpHeader{ key: "Content-Length".to_string(), value: size.to_string() });
+    }
+
     fn write_fully(buffer: &[u8], mut stream: &TcpStream) -> Result<(), io::Error> {
         let amt_to_write: usize = buffer.len();
         let mut amt_written: usize = 0;
@@ -117,11 +131,17 @@ impl HttpResponse<'_, '_> {
     pub fn write_to_stream(&mut self, mut stream: &TcpStream) -> Result<(), io::Error> {
         let code = status_to_code(&self.status);
         let message = status_to_message(&self.status);
-        let header = format!("{version} {code} {message}\r\n\r\n",
+        let leader = format!("{version} {code} {message}\r\n",
                              version=self.version_str, code=code,
                              message=message);
 
-        stream.write(header.as_bytes())?;
+        stream.write(leader.as_bytes())?;
+
+        for header in &self.headers {
+            stream.write(format!("{}: {}\r\n", header.key, header.value).as_bytes())?;
+        }
+
+        stream.write(b"\r\n")?;
 
         match &mut self.body {
             Some(body) => {
@@ -129,14 +149,10 @@ impl HttpResponse<'_, '_> {
                 loop {
                     let amt_read = body.read(&mut buffer)?;
                     if amt_read == 0 { break; }
-                    HttpResponse::write_fully(&buffer[..amt_read], stream);
+                    HttpResponse::write_fully(&buffer[..amt_read], stream)?;
                 };
             }
-            None => {
-                let body = format!("<html><body><h1>{} {}</h1></body></html>",
-                                   code, message);
-                HttpResponse::write_fully(body.as_bytes(), stream);
-            }
+            None => {}
         }
 
         Ok(())
