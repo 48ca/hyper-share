@@ -21,6 +21,8 @@ pub fn version_to_str(v: &HttpVersion) -> &'static str {
     }
 }
 
+pub const BUFFER_SIZE: usize = 1024 * 1024; // 1M chunks
+
 pub enum HttpStatus {
     OK,                      // 200
     BadRequest,              // 401
@@ -209,7 +211,7 @@ impl HttpResponse {
     pub fn partial_write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<bool, io::Error> {
         println!("Doing partial write");
         assert_eq!(self.headers_written, true);
-        let mut buffer: [u8; 4096] = [0; 4096];
+        let mut buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
         let amt_read = body.read(&mut buffer)?;
         if amt_read == 0 { return Ok(true); }
         HttpResponse::write_fully(&buffer[..amt_read], stream)?;

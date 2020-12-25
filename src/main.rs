@@ -20,7 +20,7 @@ use std::os::unix::prelude::RawFd;
 mod simple_http;
 use simple_http::{
     HttpRequest, HttpResponse, HttpStatus, HttpVersion,
-    status_to_code, status_to_message
+    HttpMethod, status_to_code, status_to_message
 };
 
 const BUFFER_SIZE: usize = 4096;
@@ -70,6 +70,7 @@ fn write_error_response(status: HttpStatus, mut conn: &mut HttpConnection) -> Re
     resp.add_header("Connection".to_string(),
                     if conn.keep_alive { "keep-alive".to_string() }
                     else { "close".to_string() });
+    resp.add_header("Content-Type".to_string(), "text/html".to_string());
 
     let data = ResponseDataType::StringData(StringSegment {
         start: 0,
@@ -208,32 +209,39 @@ fn handle_request(mut conn: &mut HttpConnection) -> Result<ConnectionState, io::
     // Fix hard-coding DEFAULT_HTTP_VERSION here
     let mut resp = HttpResponse::new(HttpStatus::OK, req.version);
 
-    let (response_data, content_length) = if metadata.is_file() {
+    let (response_data, content_length, mime) = if metadata.is_file() {
             let data = ResponseDataType::FileData(FileSegment {
                 file: fs::File::open(&canonical_path)?
             });
             let len = metadata.len() as usize;
-            (data, len)
+            (data, len, None/*Some("application/octet-stream")*/)
         } else {
             let s: &'static str = "<html><body>Directory listing isn't implemented yet!</body></html>";
             let data = ResponseDataType::StringData(StringSegment {
                 start: 0,
                 data: s.to_string(),
             });
-            (data, s.len())
+            (data, s.len(), Some("text/html"))
         };
 
     resp.set_content_length(content_length);
     resp.add_header("Connection".to_string(),
                     if conn.keep_alive { "keep-alive".to_string() }
                     else { "close".to_string() });
+    if let Some(content_type) = mime {
+        // If we want to add a content type, add it
+        resp.add_header("Content-Type".to_string(), content_type.to_string());
+    }
 
     // Write headers
     resp.write_headers_to_stream(&conn.stream)?;
 
     conn.response = Some(resp);
 
-    conn.response_data = response_data;
+    conn.response_data = match req.method.unwrap() {
+        HttpMethod::GET => response_data,
+        HttpMethod::HEAD => ResponseDataType::None
+    };
 
     // Force an initial write of the data
     write_partial_response(&mut conn)
@@ -245,9 +253,8 @@ fn write_partial_response(conn: &mut HttpConnection) -> Result<ConnectionState, 
             match &mut conn.response_data {
                 ResponseDataType::StringData(seg) => {
                     let bytes = &mut seg.data.as_bytes();
-                    // TODO: Please fix hard-coding 4096 here
                     let res = !resp.partial_write_to_stream(bytes, &conn.stream)?;
-                    if res { seg.start += 4096; }
+                    if res { seg.start += simple_http::BUFFER_SIZE; }
                     res
                 }
                 ResponseDataType::FileData(seg) => {
