@@ -2,9 +2,26 @@ use std::io;
 use std::io::Write;
 use std::net::TcpStream;
 
+#[derive(PartialEq)]
 pub enum HttpMethod {
     GET,
     HEAD,
+}
+
+#[derive(PartialEq)]
+pub enum HttpVersion {
+    Http1_0,
+    Http1_1,
+    Unknown
+}
+
+pub fn version_to_str(v: &HttpVersion) -> &'static str {
+    match v {
+        HttpVersion::Http1_0 => "HTTP/1.0",
+        HttpVersion::Http1_1 => "HTTP/1.1",
+        // Just default unknown to something reasonable
+        HttpVersion::Unknown => "HTTP/1.1"
+    }
 }
 
 pub enum HttpStatus {
@@ -44,10 +61,19 @@ pub fn status_to_message(status: &HttpStatus) -> &'static str {
     }
 }
 
+pub struct HttpHeader {
+    key: String,
+    value: String,
+}
+
+// Don't support multiple header values yet
+type HttpHeaderSet = Vec<HttpHeader>;
+
 pub struct HttpRequest<'a> {
     pub path: &'a str,
     pub method: Option<HttpMethod>,
-    pub version_str: &'a str,
+    pub version: HttpVersion,
+    headers: HttpHeaderSet,
 }
 
 impl HttpRequest<'_> {
@@ -66,9 +92,13 @@ impl HttpRequest<'_> {
         let path = first[1];
         let version_str = first[2];
 
-        if version_str != "HTTP/1.0" && version_str != "HTTP/1.1" {
+        let version = if version_str == "HTTP/1.0" {
+            HttpVersion::Http1_0
+        } else if version_str == "HTTP/1.1" {
+            HttpVersion::Http1_1
+        } else {
             return Err(HttpStatus::HttpVersionNotSupported);
-        }
+        };
 
         // unwrap safe because we know that lines will have a last element
         if lines.last().unwrap().len() != 0 {
@@ -80,39 +110,61 @@ impl HttpRequest<'_> {
                      else if verb == "HEAD" { Some(HttpMethod::HEAD) }
                      else { None };
 
+        let mut headers = HttpHeaderSet::new();
+        for header_line in &lines[1..] {
+            if header_line.len() == 0 { continue; }
+            let keyval: Vec<&str> = header_line.split(":").collect();
+            if keyval.len() != 2 { continue; }
+            headers.push(HttpHeader {
+                key: keyval[0].trim().to_lowercase(),
+                value: keyval[1].trim().to_string()
+            });
+        }
+
         Ok(HttpRequest {
             path: path,
             method: method,
-            version_str: version_str,
+            version: version,
+            headers: headers
         })
+    }
+
+    pub fn get_header(&self, key: &str) -> Option<&String> {
+        for header in &self.headers {
+            if header.key == key.to_string() {
+                return Some(&header.value);
+            }
+        }
+        None
     }
 }
 
-pub struct HttpHeader {
-    key: String,
-    value: String,
-}
-
-pub struct HttpResponse<'a, 'b> {
+pub struct HttpResponse {
     status: HttpStatus,
-    version_str: &'a str,
-    headers: Vec<HttpHeader>,
-    body: Option<&'b mut dyn io::Read>,
+    version: HttpVersion,
+    headers: HttpHeaderSet,
+    headers_written: bool,
 }
 
-impl HttpResponse<'_, '_> {
-    pub fn new<'a, 'b>(status: HttpStatus, version: &'a str, body: Option<&'b mut dyn io::Read>) -> HttpResponse<'a, 'b> {
+impl HttpResponse {
+    pub fn new(status: HttpStatus, version: HttpVersion) -> HttpResponse {
         HttpResponse {
             status: status,
-            version_str: version,
-            headers: Vec::<HttpHeader>::new(),
-            body: body,
+            version: version,
+            headers: HttpHeaderSet::new(),
+            headers_written: false,
         }
     }
 
     pub fn add_header(&mut self, key: String, value: String) {
         self.headers.push(HttpHeader{ key: key, value: value });
     }
+
+    /*
+    pub fn set_content<'a>(&mut self, body: &'a mut dyn io::Read) {
+        self.body = Some(body);
+    }
+    */
 
     pub fn set_content_length(&mut self, size: usize) {
         self.headers.push(HttpHeader{ key: "Content-Length".to_string(), value: size.to_string() });
@@ -128,11 +180,13 @@ impl HttpResponse<'_, '_> {
         Ok(())
     }
 
-    pub fn write_to_stream(&mut self, mut stream: &TcpStream) -> Result<(), io::Error> {
+    pub fn write_headers_to_stream(&mut self, mut stream: &TcpStream) -> Result<(), io::Error> {
+        println!("Writing headers to stream");
+        assert_eq!(self.headers_written, false);
         let code = status_to_code(&self.status);
         let message = status_to_message(&self.status);
         let leader = format!("{version} {code} {message}\r\n",
-                             version=self.version_str, code=code,
+                             version=version_to_str(&self.version), code=code,
                              message=message);
 
         stream.write(leader.as_bytes())?;
@@ -142,19 +196,25 @@ impl HttpResponse<'_, '_> {
         }
 
         stream.write(b"\r\n")?;
-
-        match &mut self.body {
-            Some(body) => {
-                let mut buffer: [u8; 4096] = [0; 4096];
-                loop {
-                    let amt_read = body.read(&mut buffer)?;
-                    if amt_read == 0 { break; }
-                    HttpResponse::write_fully(&buffer[..amt_read], stream)?;
-                };
-            }
-            None => {}
-        }
+        
+        self.headers_written = true;
 
         Ok(())
+    }
+
+    pub fn write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<(), io::Error> {
+        self.write_headers_to_stream(stream)?;
+        while !self.partial_write_to_stream(body, stream)? {};
+        Ok(())
+    }
+
+    pub fn partial_write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<bool, io::Error> {
+        println!("Doing partial write");
+        assert_eq!(self.headers_written, true);
+        let mut buffer: [u8; 4096] = [0; 4096];
+        let amt_read = body.read(&mut buffer)?;
+        if amt_read == 0 { return Ok(true); }
+        HttpResponse::write_fully(&buffer[..amt_read], stream)?;
+        Ok(false)
     }
 }
