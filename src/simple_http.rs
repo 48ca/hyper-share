@@ -12,15 +12,12 @@ pub enum HttpMethod {
 pub enum HttpVersion {
     Http1_0,
     Http1_1,
-    Unknown
 }
 
 pub fn version_to_str(v: &HttpVersion) -> &'static str {
     match v {
         HttpVersion::Http1_0 => "HTTP/1.0",
         HttpVersion::Http1_1 => "HTTP/1.1",
-        // Just default unknown to something reasonable
-        HttpVersion::Unknown => "HTTP/1.1"
     }
 }
 
@@ -202,6 +199,7 @@ impl HttpResponse {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<(), io::Error> {
         self.write_headers_to_stream(stream)?;
         while !self.partial_write_to_stream(body, stream)? {};

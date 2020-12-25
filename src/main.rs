@@ -11,6 +11,12 @@ use std::fs;
 
 use std::format;
 
+use std::collections::HashMap;
+
+use nix::sys::select::{select,FdSet};
+use std::os::unix::io::AsRawFd;
+use std::os::unix::prelude::RawFd;
+
 mod simple_http;
 use simple_http::{
     HttpRequest, HttpResponse, HttpStatus, HttpVersion,
@@ -48,21 +54,36 @@ fn end_of_http_request(req_body: &[u8]) -> bool {
     return &req_body[req_body.len() - 4 ..] == b"\r\n\r\n";
 }
 
-fn write_error_response(status: HttpStatus, stream: &TcpStream) -> Result<(), io::Error> {
+#[derive(PartialEq, Debug)]
+enum ConnectionState {
+    ReadingRequest,
+    WritingResponse,
+    Closing
+}
+
+fn write_error_response(status: HttpStatus, mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
     let body = format!("<html><body><h1>{} {}</h1></body></html>",
                        status_to_code(&status),
                        status_to_message(&status));
-    let mut bytes = body.as_bytes();
     let mut resp = HttpResponse::new(status, HttpVersion::Http1_0);
     resp.set_content_length(body.len());
-    resp.write_to_stream(&mut bytes, &stream)
-}
+    resp.add_header("Connection".to_string(),
+                    if conn.keep_alive { "keep-alive".to_string() }
+                    else { "close".to_string() });
 
-enum ConnectionState {
-    ReadingRequest,
-    RequestReady,
-    WritingResponse,
-    Closing
+    let data = ResponseDataType::StringData(StringSegment {
+        start: 0,
+        data: body,
+    });
+
+    // Write headers
+    resp.write_headers_to_stream(&conn.stream)?;
+
+    conn.response = Some(resp);
+    conn.response_data = data;
+
+    // Force an initial write of the data
+    write_partial_response(&mut conn)
 }
 
 struct StringSegment {
@@ -79,8 +100,8 @@ enum ResponseDataType {
     FileData(FileSegment),
 }
 
-struct HttpConnection<'a> {
-    pub stream: &'a TcpStream,
+struct HttpConnection {
+    pub stream: TcpStream,
     pub state: ConnectionState,
 
     // Buffer for holding a pending request
@@ -94,8 +115,8 @@ struct HttpConnection<'a> {
     pub keep_alive: bool,
 }
 
-impl HttpConnection<'_> {
-    pub fn new(stream: &TcpStream) -> HttpConnection {
+impl HttpConnection {
+    pub fn new(stream: TcpStream) -> HttpConnection {
         return HttpConnection {
             stream: stream,
             state: ConnectionState::ReadingRequest,
@@ -105,6 +126,11 @@ impl HttpConnection<'_> {
             response: None,
             keep_alive: true,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.bytes_read = 0;
+        self.response = None;
     }
 }
 
@@ -123,13 +149,13 @@ fn read_partial_request(conn: &mut HttpConnection) -> Result<ConnectionState, io
     };
 
     conn.bytes_read += bytes_read;
-    Ok(
-        if bytes_read == 0 || end_of_http_request(&buffer[..conn.bytes_read]) {
-            ConnectionState::RequestReady
-        } else {
-            ConnectionState::ReadingRequest
-        }
-    )
+    if bytes_read == 0 || end_of_http_request(&buffer[..conn.bytes_read]) {
+        // Once we have read the request, handle it.
+        // The connection state will be updated accordingly
+        handle_request(conn)
+    } else {
+        Ok(ConnectionState::ReadingRequest)
+    }
 }
 
 fn handle_request(mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
@@ -138,8 +164,7 @@ fn handle_request(mut conn: &mut HttpConnection) -> Result<ConnectionState, io::
     let req: HttpRequest = match decode_request(body) {
         Ok(r) => r,
         Err(status) => {
-            write_error_response(status, conn.stream)?;
-            return Ok(ConnectionState::Closing);
+            return write_error_response(status, conn);
         }
     };
 
@@ -151,37 +176,33 @@ fn handle_request(mut conn: &mut HttpConnection) -> Result<ConnectionState, io::
     };
 
     if req.method.is_none() {
-        write_error_response(HttpStatus::NotImplemented, conn.stream)?;
-        return Ok(ConnectionState::Closing);
+        return write_error_response(HttpStatus::NotImplemented, conn);
     }
 
     let canonical_path = match fs::canonicalize(req.path) {
         Err(error) => {
             // Attempt to convert the system error into an HTTP error
             // that we can send back to the user.
-            match resolve_io_error(&error) {
-                Some(http_error) => write_error_response(http_error, &conn.stream)?,
-                None => { return Err(error); }
-            }
-            return Ok(ConnectionState::Closing);
+            return match resolve_io_error(&error) {
+                Some(http_error) => write_error_response(http_error, conn),
+                None => Err(error),
+            };
         }
         Ok(path) => path
     };
 
     let metadata = match fs::metadata(&canonical_path) {
         Err(error) => {
-            match resolve_io_error(&error) {
-                Some(http_error) => write_error_response(http_error, &conn.stream)?,
-                None => { return Err(error); }
-            }
-            return Ok(ConnectionState::Closing);
+            return match resolve_io_error(&error) {
+                Some(http_error) => write_error_response(http_error, conn),
+                None => Err(error),
+            };
         }
         Ok(data) => data
     };
 
     if !metadata.is_file() && !metadata.is_dir() {
-        write_error_response(HttpStatus::PermissionDenied, &conn.stream)?;
-        return Ok(ConnectionState::Closing);
+        return write_error_response(HttpStatus::PermissionDenied, conn);
     }
 
     // Fix hard-coding DEFAULT_HTTP_VERSION here
@@ -240,6 +261,8 @@ fn write_partial_response(conn: &mut HttpConnection) -> Result<ConnectionState, 
 
     if done {
         if conn.keep_alive {
+            // Reset the data associated with this connection
+            conn.reset();
             return Ok(ConnectionState::ReadingRequest);
         } else {
             return Ok(ConnectionState::Closing);
@@ -249,7 +272,7 @@ fn write_partial_response(conn: &mut HttpConnection) -> Result<ConnectionState, 
     return Ok(ConnectionState::WritingResponse);
 }
 
-fn create_http_connection(stream: &TcpStream) -> HttpConnection {
+fn create_http_connection(stream: TcpStream) -> HttpConnection {
     // Print that the connection has been established
     let peer_addr = stream.peer_addr().unwrap();
     match peer_addr {
@@ -263,23 +286,34 @@ fn create_http_connection(stream: &TcpStream) -> HttpConnection {
         }
     }
 
-    HttpConnection::new(&stream)
+    HttpConnection::new(stream)
 }
 
-fn handle_conn(mut conn: HttpConnection) -> Result<(), io::Error> {
-    loop {
-        match conn.state {
-            ConnectionState::ReadingRequest => {
-                conn.state = read_partial_request(&mut conn)?;
+fn handle_conn_sigpipe(conn: &mut HttpConnection) -> Result<(), io::Error> {
+    match handle_conn(conn) {
+        Err(error) => {
+            match error.kind() {
+                io::ErrorKind::BrokenPipe => {
+                    conn.state = ConnectionState::Closing;
+                    Ok(())
+                },
+                // Forward the error if it wasn't broken pipe
+                _ => Err(error)
             }
-            ConnectionState::RequestReady => {
-                conn.state = handle_request(&mut conn)?;
-            }
-            ConnectionState::WritingResponse => {
-                conn.state = write_partial_response(&mut conn)?;
-            }
-            ConnectionState::Closing => { break; }
+        },
+        _ => Ok(())
+    }
+}
+
+fn handle_conn(conn: &mut HttpConnection) -> Result<(), io::Error> {
+    match conn.state {
+        ConnectionState::ReadingRequest => {
+            conn.state = read_partial_request(conn)?;
         }
+        ConnectionState::WritingResponse => {
+            conn.state = write_partial_response(conn)?;
+        }
+        ConnectionState::Closing => {}
     }
 
     Ok(())
@@ -289,21 +323,110 @@ fn main() {
     let port: u16 = 8080;
     let mask: &'static str = "0.0.0.0";
     let listener = TcpListener::bind(format!("{mask}:{port}", mask=mask, port=port)).unwrap();
-    for _stream in listener.incoming() {
-        match _stream {
-            Ok(stream) => {
-                let conn = create_http_connection(&stream);
-                match handle_conn(conn) {
-                    Ok(_) => println!("Connection closing normally"),
-                    Err(e) => {
-                        // Ignore the return value of write_error_response, because
-                        // we're closing the connection anyway.
-                        let _ = write_error_response(HttpStatus::ServerError, &stream);
-                        println!("Server error: {}", e);
+
+    let mut connections = HashMap::<RawFd, HttpConnection>::new();
+
+    let l_raw_fd = listener.as_raw_fd();
+
+    loop {
+        let mut r_fds = FdSet::new();
+        let mut w_fds = FdSet::new();
+        let mut e_fds = FdSet::new();
+
+        // First add listener:
+        r_fds.insert(l_raw_fd);
+        e_fds.insert(l_raw_fd);
+
+        for (fd, http_conn) in &connections {
+            match http_conn.state {
+                ConnectionState::WritingResponse => { w_fds.insert(*fd); }
+                ConnectionState::ReadingRequest  => { r_fds.insert(*fd); }
+                _ => {}
+            }
+            e_fds.insert(*fd);
+        }
+
+        match select(None, Some(&mut r_fds), Some(&mut w_fds), Some(&mut e_fds), None) {
+            Ok(_res) => {},
+            Err(e) => {
+                println!("Got error while selecting: {}", e);
+                break;
+            }
+        }
+
+        match r_fds.highest() {
+            None => {},
+            Some(mfd) => {
+                for fd in 0..(mfd + 1) {
+                    if !r_fds.contains(fd) { continue; }
+                    // if !connections.contains_key(&fd) { continue; }
+                    // If listener, get accept new connection and add it.
+                    if fd == l_raw_fd {
+                        match listener.accept() {
+                            Ok((stream, _addr)) => {
+                                let conn = create_http_connection(stream);
+                                connections.insert(conn.stream.as_raw_fd(), conn);
+                            }
+                            Err(e) => write_error(e.to_string()),
+                        }
+                    } else {
+                        assert_eq!(connections[&fd].state, ConnectionState::ReadingRequest);
+                        // TODO: Error checking here
+                        let mut conn = connections.get_mut(&fd).unwrap();
+                        match handle_conn_sigpipe(&mut conn) {
+                            Ok(_) => {},
+                            Err(error) => {
+                                let _ = write_error_response(HttpStatus::ServerError, conn);
+                                write_error(format!("Server error while reading: {}", error));
+                            }
+                        };
+                        if connections[&fd].state == ConnectionState::Closing {
+                            // Delete to close connection
+                            connections.remove(&fd);
+                        }
                     }
                 }
             }
-            Err(e) => write_error(e.to_string()),
+        }
+        match w_fds.highest() {
+            None => {},
+            Some(mfd) => {
+                for fd in 0..(mfd + 1) {
+                    if !w_fds.contains(fd) { continue; }
+                    // if !connections.contains_key(&fd) { continue; }
+                    assert_eq!(connections[&fd].state, ConnectionState::WritingResponse);
+                    match handle_conn_sigpipe(&mut connections.get_mut(&fd).unwrap()) {
+                        Ok(_) => {},
+                        Err(error) => {
+                            write_error(format!("Server error while writing: {}", error));
+                        }
+                    }
+                    if connections[&fd].state == ConnectionState::Closing {
+                        // Delete to close connection
+                        connections.remove(&fd);
+                    }
+                }
+            }
+        }
+        match e_fds.highest() {
+            None => {},
+            Some(mfd) => {
+                for fd in 0..(mfd + 1) {
+                    if !e_fds.contains(fd) { continue; }
+                    // if !connections.contains_key(&fd) { continue; }
+                    // If listener, get accept new connection and add it.
+                    if fd == l_raw_fd {
+                        eprintln!("Listener socket has errored!");
+                        break;
+                    } else {
+                        // Ignore the return value of write_error_response, because
+                        // we're closing the connection anyway.
+                        let _ = write_error_response(HttpStatus::ServerError, connections.get_mut(&fd).unwrap());
+                        println!("Got bad state on client socket");
+                        connections.remove(&fd);
+                    }
+                }
+            }
         }
     }
 }
