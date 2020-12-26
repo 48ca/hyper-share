@@ -72,6 +72,9 @@ fn write_error_response(status: HttpStatus, mut conn: &mut HttpConnection) -> Re
                     else { "close".to_string() });
     resp.add_header("Content-Type".to_string(), "text/html".to_string());
 
+    // Add content-length to bytes requested
+    conn.bytes_requested += body.len();
+
     let data = ResponseDataType::StringData(StringSegment {
         start: 0,
         data: body,
@@ -114,6 +117,9 @@ struct HttpConnection {
     pub response: Option<HttpResponse>,
 
     pub keep_alive: bool,
+
+    pub bytes_requested: usize,
+    pub bytes_sent: usize,
 }
 
 impl HttpConnection {
@@ -126,6 +132,8 @@ impl HttpConnection {
             response_data: ResponseDataType::None,
             response: None,
             keep_alive: true,
+            bytes_requested: 0,
+            bytes_sent: 0,
         }
     }
 
@@ -178,6 +186,10 @@ fn handle_request(mut conn: &mut HttpConnection) -> Result<ConnectionState, io::
 
     if req.method.is_none() {
         return write_error_response(HttpStatus::NotImplemented, conn);
+    }
+
+    if *req.method.as_ref().unwrap() == HttpMethod::GET {
+        println!("GET {}", req.path);
     }
 
     let canonical_path = match fs::canonicalize(req.path) {
@@ -239,7 +251,10 @@ fn handle_request(mut conn: &mut HttpConnection) -> Result<ConnectionState, io::
     conn.response = Some(resp);
 
     conn.response_data = match req.method.unwrap() {
-        HttpMethod::GET => response_data,
+        HttpMethod::GET => {
+            conn.bytes_requested += content_length;
+            response_data 
+        }
         HttpMethod::HEAD => ResponseDataType::None
     };
 
@@ -250,18 +265,21 @@ fn handle_request(mut conn: &mut HttpConnection) -> Result<ConnectionState, io::
 fn write_partial_response(conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
     let done = match &mut conn.response {
         Some(ref mut resp) => {
-            match &mut conn.response_data {
+            let amt_written = match &mut conn.response_data {
                 ResponseDataType::StringData(seg) => {
-                    let bytes = &mut seg.data.as_bytes();
-                    let res = !resp.partial_write_to_stream(bytes, &conn.stream)?;
-                    if res { seg.start += simple_http::BUFFER_SIZE; }
-                    res
+                    let bytes = &mut seg.data[seg.start..].as_bytes();
+                    let written = resp.partial_write_to_stream(bytes, &conn.stream)?;
+                    seg.start += written;
+                    written
                 }
                 ResponseDataType::FileData(seg) => {
                     resp.partial_write_to_stream(&mut seg.file, &conn.stream)?
                 }
-                ResponseDataType::None => true
-            }
+                ResponseDataType::None => 0
+            };
+            conn.bytes_sent += amt_written;
+            // If we wrote nothing, we are done
+            amt_written == 0
         }
         None => true,
     };
@@ -313,6 +331,7 @@ fn handle_conn_sigpipe(conn: &mut HttpConnection) -> Result<(), io::Error> {
 }
 
 fn handle_conn(conn: &mut HttpConnection) -> Result<(), io::Error> {
+    println!("Handling connection: {}/{}", conn.bytes_sent, conn.bytes_requested);
     match conn.state {
         ConnectionState::ReadingRequest => {
             conn.state = read_partial_request(conn)?;
@@ -343,6 +362,8 @@ fn main() {
         // First add listener:
         r_fds.insert(l_raw_fd);
         e_fds.insert(l_raw_fd);
+
+        println!("Active connections: {}", connections.len());
 
         for (fd, http_conn) in &connections {
             match http_conn.state {

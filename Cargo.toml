@@ -1,5 +1,5 @@
 [package]
-name = "http-ncurses"
+name = "http-tui"
 version = "0.1.0"
 authors = ["James Houghton <jhoughton@virginia.edu>"]
 edition = "2018"

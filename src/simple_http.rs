@@ -180,7 +180,6 @@ impl HttpResponse {
     }
 
     pub fn write_headers_to_stream(&mut self, mut stream: &TcpStream) -> Result<(), io::Error> {
-        println!("Writing headers to stream");
         assert_eq!(self.headers_written, false);
         let code = status_to_code(&self.status);
         let message = status_to_message(&self.status);
@@ -204,17 +203,16 @@ impl HttpResponse {
     #[allow(dead_code)]
     pub fn write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<(), io::Error> {
         self.write_headers_to_stream(stream)?;
-        while !self.partial_write_to_stream(body, stream)? {};
+        while self.partial_write_to_stream(body, stream)? > 0 {};
         Ok(())
     }
 
-    pub fn partial_write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<bool, io::Error> {
-        println!("Doing partial write");
+    pub fn partial_write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<usize, io::Error> {
         assert_eq!(self.headers_written, true);
         let mut buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
         let amt_read = body.read(&mut buffer)?;
-        if amt_read == 0 { return Ok(true); }
+        if amt_read == 0 { return Ok(0); }
         HttpResponse::write_fully(&buffer[..amt_read], stream)?;
-        Ok(false)
+        Ok(amt_read)
     }
 }
