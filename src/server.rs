@@ -19,6 +19,8 @@ use std::os::unix::prelude::RawFd;
 
 use std::path::Path;
 
+mod rendering;
+
 mod simple_http;
 use simple_http::{
     HttpRequest, HttpResponse, HttpStatus, HttpVersion,
@@ -348,12 +350,12 @@ impl HttpTui<'_> {
                 let len = metadata.len() as usize;
                 (data, len, None/*Some("application/octet-stream")*/)
             } else {
-                let s: &'static str = "<html><body>Directory listing isn't implemented yet!</body></html>";
+                let s: String = rendering::render_directory(canonical_path.as_path());
+                let len = s.len();
                 let data = ResponseDataType::StringData(StringSegment {
-                    start: 0,
-                    data: s.to_string(),
+                    start: 0, data: s,
                 });
-                (data, s.len(), Some("text/html"))
+                (data, len, Some("text/html"))
             };
 
         resp.set_content_length(content_length);
