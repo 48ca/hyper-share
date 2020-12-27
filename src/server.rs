@@ -65,7 +65,7 @@ pub enum ConnectionState {
     Closing
 }
 
-struct SeekableString {
+pub struct SeekableString {
     pub start: usize,
     pub data: String,
 }
@@ -99,11 +99,11 @@ impl Seek for SeekableString {
     }
 }
 
-struct StringSegment {
+pub struct StringSegment {
     pub data: SeekableString,
 }
 
-struct FileSegment {
+pub struct FileSegment {
     pub data: fs::File,
 }
 
@@ -152,10 +152,6 @@ impl HttpConnection {
     }
 }
 
-pub enum HttpTuiOperation {
-    Kill,
-}
-
 pub struct HttpTui<'a> {
     listener: TcpListener,
     root_dir: &'a Path,
@@ -170,11 +166,11 @@ impl HttpTui<'_> {
         })
     }
 
-    pub fn run(&mut self, func: fn(&HashMap::<RawFd, HttpConnection>) -> Option<HttpTuiOperation>) {
+    pub fn run(&mut self, pipe_read: RawFd, func: impl Fn(&HashMap::<RawFd, HttpConnection>)) {
         let mut connections = HashMap::<RawFd, HttpConnection>::new();
         let l_raw_fd = self.listener.as_raw_fd();
 
-        loop {
+        'main: loop {
             let mut r_fds = FdSet::new();
             let mut w_fds = FdSet::new();
             let mut e_fds = FdSet::new();
@@ -182,6 +178,9 @@ impl HttpTui<'_> {
             // First add listener:
             r_fds.insert(l_raw_fd);
             e_fds.insert(l_raw_fd);
+
+            r_fds.insert(pipe_read);
+            e_fds.insert(pipe_read);
 
             for (fd, http_conn) in &connections {
                 match http_conn.state {
@@ -206,6 +205,11 @@ impl HttpTui<'_> {
                     for fd in 0..(mfd + 1) {
                         if !r_fds.contains(fd) { continue; }
                         // if !connections.contains_key(&fd) { continue; }
+
+                        // If we have data to read on the pipe, we need to close
+                        if fd == pipe_read {
+                            break 'main;
+                        }
                         // If listener, get accept new connection and add it.
                         if fd == l_raw_fd {
                             match self.listener.accept() {
@@ -260,10 +264,13 @@ impl HttpTui<'_> {
                     for fd in 0..(mfd + 1) {
                         if !e_fds.contains(fd) { continue; }
                         // if !connections.contains_key(&fd) { continue; }
+                        if fd == pipe_read {
+                            break 'main;
+                        }
                         // If listener, get accept new connection and add it.
                         if fd == l_raw_fd {
                             eprintln!("Listener socket has errored!");
-                            break;
+                            break 'main;
                         } else {
                             // Ignore the return value of write_error_response, because
                             // we're closing the connection anyway.
@@ -274,13 +281,8 @@ impl HttpTui<'_> {
                     }
                 }
             }
-            match func(&connections) {
-                Some(op) => { match op {
-                        HttpTuiOperation::Kill => { break; }
-                    }
-                },
-                None => {}
-            }
+
+            func(&connections);
         }
     }
 

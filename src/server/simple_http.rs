@@ -230,7 +230,7 @@ impl HttpResponse {
         // HttpResponse::write_fully(&buffer[..amt_read], stream)?;
         let amt_written = stream.write(&buffer[..amt_read])?;
         if amt_written != amt_read {
-            body.seek(io::SeekFrom::Current((amt_read - amt_written) as i64));
+            body.seek(io::SeekFrom::Current((amt_read - amt_written) as i64))?;
         }
         self.last_write_length = amt_written;
         Ok(amt_written)
