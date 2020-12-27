@@ -1,6 +1,7 @@
 use std::io;
 use std::io::Write;
 use std::net::TcpStream;
+use std::cmp::min;
 
 #[derive(PartialEq)]
 pub enum HttpMethod {
@@ -143,6 +144,7 @@ pub struct HttpResponse {
     version: HttpVersion,
     headers: HttpHeaderSet,
     headers_written: bool,
+    last_write_length: usize,
 }
 
 impl HttpResponse {
@@ -152,6 +154,7 @@ impl HttpResponse {
             version: version,
             headers: HttpHeaderSet::new(),
             headers_written: false,
+            last_write_length: BUFFER_SIZE,
         }
     }
 
@@ -169,6 +172,7 @@ impl HttpResponse {
         self.headers.push(HttpHeader{ key: "Content-Length".to_string(), value: size.to_string() });
     }
 
+    #[allow(dead_code)]
     fn write_fully(buffer: &[u8], mut stream: &TcpStream) -> Result<(), io::Error> {
         let amt_to_write: usize = buffer.len();
         let mut amt_written: usize = 0;
@@ -201,18 +205,34 @@ impl HttpResponse {
     }
 
     #[allow(dead_code)]
-    pub fn write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<(), io::Error> {
+    pub fn write_to_stream<T>(&mut self, body: &mut T, stream: &TcpStream) -> Result<(), io::Error>
+    where
+        T: io::Read + io::Seek
+    {
         self.write_headers_to_stream(stream)?;
         while self.partial_write_to_stream(body, stream)? > 0 {};
         Ok(())
     }
 
-    pub fn partial_write_to_stream(&mut self, body: &mut dyn io::Read, stream: &TcpStream) -> Result<usize, io::Error> {
+    pub fn chunk_size(&self) -> usize {
+        return self.last_write_length;
+    }
+
+    pub fn partial_write_to_stream<T>(&mut self, body: &mut T, mut stream: &TcpStream) -> Result<usize, io::Error>
+    where
+        T: io::Read + io::Seek
+    {
         assert_eq!(self.headers_written, true);
         let mut buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
-        let amt_read = body.read(&mut buffer)?;
+        let write_length = min(self.last_write_length + 4096, BUFFER_SIZE);
+        let amt_read = body.read(&mut buffer[..write_length])?;
         if amt_read == 0 { return Ok(0); }
-        HttpResponse::write_fully(&buffer[..amt_read], stream)?;
-        Ok(amt_read)
+        // HttpResponse::write_fully(&buffer[..amt_read], stream)?;
+        let amt_written = stream.write(&buffer[..amt_read])?;
+        if amt_written != amt_read {
+            body.seek(io::SeekFrom::Current((amt_read - amt_written) as i64));
+        }
+        self.last_write_length = amt_written;
+        Ok(amt_written)
     }
 }

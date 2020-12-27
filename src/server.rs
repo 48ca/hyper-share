@@ -3,7 +3,7 @@ use std::net::TcpStream;
 use std::net::SocketAddr::{V4,V6};
 
 use std::io;
-use std::io::Read;
+use std::io::{Read,Seek,SeekFrom};
 
 use std::str::from_utf8;
 
@@ -59,27 +59,61 @@ fn end_of_http_request(req_body: &[u8]) -> bool {
 }
 
 #[derive(PartialEq, Debug)]
-enum ConnectionState {
+pub enum ConnectionState {
     ReadingRequest,
     WritingResponse,
     Closing
 }
 
-struct StringSegment {
+struct SeekableString {
     pub start: usize,
     pub data: String,
 }
-struct FileSegment {
-    pub file: fs::File,
+
+impl SeekableString {
+    pub fn new(d: String) -> SeekableString {
+        SeekableString {
+            start: 0,
+            data: d
+        }
+    }
 }
 
-enum ResponseDataType {
+impl Read for SeekableString {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+        let mut slice = &self.data.as_bytes()[self.start..];
+        let read = slice.read(buf)?;
+        self.start += read;
+        Ok(read)
+    }
+}
+
+impl Seek for SeekableString {
+    fn seek(&mut self, pos: SeekFrom) -> Result<u64, io::Error>{
+        self.start = match pos {
+            SeekFrom::Start(i) => i as usize,
+            SeekFrom::Current(i) => ((self.start as i64) + i) as usize,
+            SeekFrom::End(i) => ((self.data.len() as i64) - i) as usize,
+        };
+        Ok(self.start as u64)
+    }
+}
+
+struct StringSegment {
+    pub data: SeekableString,
+}
+
+struct FileSegment {
+    pub data: fs::File,
+}
+
+pub enum ResponseDataType {
     None,
     StringData(StringSegment),
     FileData(FileSegment),
 }
 
-struct HttpConnection {
+pub struct HttpConnection {
     pub stream: TcpStream,
     pub state: ConnectionState,
 
@@ -128,15 +162,15 @@ pub struct HttpTui<'a> {
 }
 
 impl HttpTui<'_> {
-    pub fn new<'a>(host: &str, port: u16, root_dir: &'a Path) -> HttpTui<'a> {
-        let listener = TcpListener::bind(format!("{mask}:{port}", mask=host, port=port)).unwrap();
-        HttpTui {
+    pub fn new<'a>(host: &str, port: u16, root_dir: &'a Path) -> Result<HttpTui<'a>, io::Error> {
+        let listener = TcpListener::bind(format!("{mask}:{port}", mask=host, port=port))?;
+        Ok(HttpTui {
             listener: listener,
             root_dir: root_dir,
-        }
+        })
     }
 
-    pub fn run(&mut self, func: fn() -> Option<HttpTuiOperation>) {
+    pub fn run(&mut self, func: fn(&HashMap::<RawFd, HttpConnection>) -> Option<HttpTuiOperation>) {
         let mut connections = HashMap::<RawFd, HttpConnection>::new();
         let l_raw_fd = self.listener.as_raw_fd();
 
@@ -148,8 +182,6 @@ impl HttpTui<'_> {
             // First add listener:
             r_fds.insert(l_raw_fd);
             e_fds.insert(l_raw_fd);
-
-            println!("Active connections: {}", connections.len());
 
             for (fd, http_conn) in &connections {
                 match http_conn.state {
@@ -242,7 +274,7 @@ impl HttpTui<'_> {
                     }
                 }
             }
-            match func() {
+            match func(&connections) {
                 Some(op) => { match op {
                         HttpTuiOperation::Kill => { break; }
                     }
@@ -297,10 +329,6 @@ impl HttpTui<'_> {
             return self.write_error_response(HttpStatus::NotImplemented, conn);
         }
 
-        if *req.method.as_ref().unwrap() == HttpMethod::GET {
-            println!("GET {}", req.path);
-        }
-
         let normalized_path = if req.path.starts_with("/") {
             &req.path[1..]
         } else {
@@ -340,12 +368,11 @@ impl HttpTui<'_> {
             return self.write_error_response(HttpStatus::PermissionDenied, conn);
         }
 
-        // Fix hard-coding DEFAULT_HTTP_VERSION here
         let mut resp = HttpResponse::new(HttpStatus::OK, req.version);
 
         let (response_data, content_length, mime) = if metadata.is_file() {
                 let data = ResponseDataType::FileData(FileSegment {
-                    file: fs::File::open(&canonical_path)?
+                    data: fs::File::open(&canonical_path)?
                 });
                 let len = metadata.len() as usize;
                 (data, len, None/*Some("application/octet-stream")*/)
@@ -353,7 +380,7 @@ impl HttpTui<'_> {
                 let s: String = rendering::render_directory(canonical_path.as_path());
                 let len = s.len();
                 let data = ResponseDataType::StringData(StringSegment {
-                    start: 0, data: s,
+                    data: SeekableString::new(s)
                 });
                 (data, len, Some("text/html"))
             };
@@ -389,13 +416,10 @@ impl HttpTui<'_> {
             Some(ref mut resp) => {
                 let amt_written = match &mut conn.response_data {
                     ResponseDataType::StringData(seg) => {
-                        let bytes = &mut seg.data[seg.start..].as_bytes();
-                        let written = resp.partial_write_to_stream(bytes, &conn.stream)?;
-                        seg.start += written;
-                        written
+                        resp.partial_write_to_stream(&mut seg.data, &conn.stream)?
                     }
                     ResponseDataType::FileData(seg) => {
-                        resp.partial_write_to_stream(&mut seg.file, &conn.stream)?
+                        resp.partial_write_to_stream(&mut seg.data, &conn.stream)?
                     }
                     ResponseDataType::None => 0
                 };
@@ -453,7 +477,6 @@ impl HttpTui<'_> {
     }
 
     fn handle_conn(&self, conn: &mut HttpConnection) -> Result<(), io::Error> {
-        println!("Handling connection: {}/{}", conn.bytes_sent, conn.bytes_requested);
         match conn.state {
             ConnectionState::ReadingRequest => {
                 conn.state = self.read_partial_request(conn)?;
@@ -482,8 +505,7 @@ impl HttpTui<'_> {
         conn.bytes_requested += body.len();
 
         let data = ResponseDataType::StringData(StringSegment {
-            start: 0,
-            data: body,
+            data: SeekableString::new(body)
         });
 
         // Write headers

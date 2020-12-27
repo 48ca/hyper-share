@@ -6,8 +6,9 @@ pub fn render_directory(path: &Path) -> String {
     s.push_str("<html><body>");
     let paths = fs::read_dir(path).unwrap();
     for path in paths {
-        s.push_str("<a href>");
-        s.push_str(path.unwrap().file_name().to_str().unwrap());
+        let fname = path.unwrap().file_name();
+        let anch = format!("<a href='{}'>{}</a>", fname.to_str().unwrap(), fname.to_str().unwrap());
+        s.push_str(&anch);
         s.push_str("</i><br>");
     }
     s.push_str("</body></html>");
