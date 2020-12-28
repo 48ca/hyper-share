@@ -181,18 +181,21 @@ fn main() -> Result<(), io::Error> {
 }
 
 fn build_str(addr: &SocketAddr, conn: &Connection) -> String {
+    let perc = if conn.bytes_requested == 0 { 0 } else {
+        100 * conn.bytes_sent/conn.bytes_requested
+    };
     let ip_str = match addr {
         SocketAddr::V4(v4_addr) => {
             format!("{host}:{port} => {sent}/{reqd} ({perc}%)",
                     host=v4_addr.ip(), port=v4_addr.port(),
                     sent=conn.bytes_sent, reqd=conn.bytes_requested,
-                    perc=(100. * (conn.bytes_sent as f64))/(conn.bytes_requested as f64))
+                    perc=perc)
         }
         SocketAddr::V6(v6_addr) => {
             format!("[{host}:{port}] => {sent}/{reqd} ({perc}%)",
                     host=v6_addr.ip(), port=v6_addr.port(),
                     sent=conn.bytes_sent, reqd=conn.bytes_requested,
-                    perc=(100. * (conn.bytes_sent as f64))/(conn.bytes_requested as f64))
+                    perc=perc)
         }
     };
     
