@@ -9,8 +9,9 @@ use std::io;
 use termion::raw::IntoRawMode;
 use tui::Terminal;
 use tui::backend::TermionBackend;
-use tui::widgets::{Block, Borders};
+use tui::widgets::{Block, Borders, List, ListItem};
 use tui::layout::{Layout, Constraint, Direction};
+use tui::text::{Span, Spans};
 use termion::input::TermRead;
 use termion::event::Key;
 use termion::screen::AlternateScreen;
@@ -23,6 +24,7 @@ use std::sync::atomic::{AtomicBool,Ordering};
 use std::sync::mpsc;
 
 use std::thread;
+use std::time;
 
 use crate::server::HttpConnection;
 
@@ -76,7 +78,10 @@ impl ConnectionSet {
     pub fn update(&mut self, current_conns: &HashMap<i32, HttpConnection>) {
         let mut reindexed = HashMap::<SocketAddr, &HttpConnection>::new();
         for (_, conn) in current_conns {
-            let peer_addr = conn.stream.peer_addr().unwrap();
+            let peer_addr = match conn.stream.peer_addr() {
+                Ok(addr) => addr,
+                Err(_) => { continue; }
+            };
             reindexed.insert(peer_addr, &conn);
         }
 
@@ -136,8 +141,9 @@ fn main() -> Result<(), io::Error> {
 
     let (tx, rx) = mpsc::channel();
 
+    let connection_set_ptr = connection_set.clone();
     let thd = thread::spawn(move || {
-        let _ = display(rx, &needs_update_clone);
+        let _ = display(connection_set_ptr, rx, &needs_update_clone);
         let _ = unistd::write(write_end, "\0".as_bytes());
         let _ = unistd::close(write_end);
     });
@@ -174,7 +180,26 @@ fn main() -> Result<(), io::Error> {
     Ok(())
 }
 
-fn display(rx: mpsc::Receiver<ControlEvent>, needs_update: &AtomicBool) -> Result<(), io::Error> {
+fn build_str(addr: &SocketAddr, conn: &Connection) -> String {
+    let ip_str = match addr {
+        SocketAddr::V4(v4_addr) => {
+            format!("{host}:{port} => {sent}/{reqd} ({perc}%)",
+                    host=v4_addr.ip(), port=v4_addr.port(),
+                    sent=conn.bytes_sent, reqd=conn.bytes_requested,
+                    perc=(100. * (conn.bytes_sent as f64))/(conn.bytes_requested as f64))
+        }
+        SocketAddr::V6(v6_addr) => {
+            format!("[{host}:{port}] => {sent}/{reqd} ({perc}%)",
+                    host=v6_addr.ip(), port=v6_addr.port(),
+                    sent=conn.bytes_sent, reqd=conn.bytes_requested,
+                    perc=(100. * (conn.bytes_sent as f64))/(conn.bytes_requested as f64))
+        }
+    };
+    
+    ip_str
+}
+
+fn display(connection_set: Arc<Mutex<ConnectionSet>>, rx: mpsc::Receiver<ControlEvent>, needs_update: &AtomicBool) -> Result<(), io::Error> {
 
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);
@@ -182,28 +207,35 @@ fn display(rx: mpsc::Receiver<ControlEvent>, needs_update: &AtomicBool) -> Resul
     let mut terminal = Terminal::new(backend)?;
 
     'outer: loop {
-        terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .margin(1)
-                .constraints(
-                    [
-                        Constraint::Percentage(10),
-                        Constraint::Percentage(80),
-                        Constraint::Percentage(10)
-                    ].as_ref()
-                )
-                .split(f.size());
-            let block = Block::default()
-                 .title("Block")
-                 .borders(Borders::ALL);
-            f.render_widget(block, chunks[0]);
-            let block = Block::default()
-                 .title("Block 2")
-                 .borders(Borders::ALL);
-            f.render_widget(block, chunks[1]);
-        })?;
+        // if needs_update was false, it has been updated
+        if !needs_update.swap(true, Ordering::Relaxed) {
 
+            // Print that the connection has been established
+            let conn_set = &connection_set.lock().unwrap().connections;
+            let messages: Vec<ListItem> = conn_set.iter().map(|(addr, conn)| {
+                ListItem::new(vec![Spans::from(Span::raw(build_str(addr, conn)))])
+            }).collect();
+
+            terminal.draw(|f| {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .margin(1)
+                    .constraints(
+                        [
+                            Constraint::Percentage(10),
+                            Constraint::Percentage(80),
+                            Constraint::Percentage(10)
+                        ].as_ref()
+                    )
+                    .split(f.size());
+                let block = Block::default()
+                     .title("Block")
+                     .borders(Borders::ALL);
+                f.render_widget(block, chunks[0]);
+                let block = List::new(messages).block(Block::default().borders(Borders::ALL).title("Connections"));
+                f.render_widget(block, chunks[1]);
+            })?;
+        }
 
         loop {
             match rx.try_recv() {
@@ -212,9 +244,11 @@ fn display(rx: mpsc::Receiver<ControlEvent>, needs_update: &AtomicBool) -> Resul
                 Err(mpsc::TryRecvError::Disconnected) => { break 'outer; }
             }
         }
-    }
 
-    // needs_update.store(true, Ordering::Relaxed);
+        // If we don't chill a little, we'll actually slow down the http server
+        // because we'll be doing a ton of copies.
+        thread::sleep(time::Duration::from_millis(100));
+    }
 
     Ok(())
 }

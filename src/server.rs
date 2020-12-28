@@ -1,6 +1,5 @@
 use std::net::TcpListener;
 use std::net::TcpStream;
-use std::net::SocketAddr::{V4,V6};
 
 use std::io;
 use std::io::{Read,Seek,SeekFrom};
@@ -446,19 +445,6 @@ impl HttpTui<'_> {
     }
 
     fn create_http_connection(stream: TcpStream) -> HttpConnection {
-        // Print that the connection has been established
-        let peer_addr = stream.peer_addr().unwrap();
-        match peer_addr {
-            V4(v4_addr) => {
-                println!("Connection established: {host}:{port}",
-                    host=v4_addr.ip(), port=v4_addr.port());
-            }
-            V6(v6_addr) => {
-                println!("Connection established: [{host}]:{port}",
-                host=v6_addr.ip(), port=v6_addr.port());
-            }
-        }
-
         HttpConnection::new(stream)
     }
 

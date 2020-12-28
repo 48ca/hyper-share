@@ -22,7 +22,7 @@ pub fn version_to_str(v: &HttpVersion) -> &'static str {
     }
 }
 
-pub const BUFFER_SIZE: usize = 1024 * 1024; // 1M chunks
+pub const BUFFER_SIZE: usize = 1024 * 1024;
 
 pub enum HttpStatus {
     OK,                      // 200
