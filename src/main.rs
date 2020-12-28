@@ -46,7 +46,10 @@ struct Opts {
 struct Connection {
     addr: SocketAddr,
     bytes_sent: usize,
-    bytes_requested: usize
+    bytes_requested: usize,
+    prev_bytes_sent: usize,
+    update_time: time::Instant,
+    prev_update_time: time::Instant,
 }
 
 impl Connection {
@@ -54,13 +57,30 @@ impl Connection {
         Connection {
             addr: addr,
             bytes_sent: 0,
-            bytes_requested: 0
+            prev_bytes_sent: 0,
+            bytes_requested: 0,
+            update_time: time::Instant::now(),
+            prev_update_time: time::Instant::now(),
         }
     }
 
     pub fn update(&mut self, conn: &HttpConnection) {
         self.bytes_sent = conn.bytes_sent;
         self.bytes_requested = conn.bytes_requested;
+    }
+
+    pub fn estimated_speed(&mut self) -> f32 {
+        self.prev_update_time = self.update_time;
+        self.update_time = time::Instant::now();
+        let dur = self.update_time.duration_since(self.prev_update_time);
+
+        let millis: u64 = 1000 * dur.as_secs() + (dur.subsec_nanos() as u64)/1000000;
+        if millis == 0 { return 0.; }
+        let res = (self.bytes_sent - self.prev_bytes_sent) as f32 / (millis as f32) * 1000.0;
+
+        self.prev_bytes_sent = self.bytes_sent;
+
+        res
     }
 }
 
@@ -180,22 +200,25 @@ fn main() -> Result<(), io::Error> {
     Ok(())
 }
 
-fn build_str(addr: &SocketAddr, conn: &Connection) -> String {
+fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
     let perc = if conn.bytes_requested == 0 { 0 } else {
         100 * conn.bytes_sent/conn.bytes_requested
     };
+    let speed = conn.estimated_speed();
     let ip_str = match addr {
         SocketAddr::V4(v4_addr) => {
-            format!("{host}:{port} => {sent}/{reqd} ({perc}%)",
+            format!("{host}:{port} => {sent}/{reqd} ({perc}% {speed} MiB/s)",
                     host=v4_addr.ip(), port=v4_addr.port(),
                     sent=conn.bytes_sent, reqd=conn.bytes_requested,
-                    perc=perc)
+                    perc=perc,
+                    speed=speed / (1024. * 1024.))
         }
         SocketAddr::V6(v6_addr) => {
-            format!("[{host}:{port}] => {sent}/{reqd} ({perc}%)",
+            format!("[{host}:{port}] => {sent}/{reqd} ({perc}% {speed} MiB/s)",
                     host=v6_addr.ip(), port=v6_addr.port(),
                     sent=conn.bytes_sent, reqd=conn.bytes_requested,
-                    perc=perc)
+                    perc=perc,
+                    speed=speed / (1024. * 1024.))
         }
     };
     
@@ -214,8 +237,9 @@ fn display(connection_set: Arc<Mutex<ConnectionSet>>, rx: mpsc::Receiver<Control
         if !needs_update.swap(true, Ordering::Relaxed) {
 
             // Print that the connection has been established
-            let conn_set = &connection_set.lock().unwrap().connections;
-            let messages: Vec<ListItem> = conn_set.iter().map(|(addr, conn)| {
+            let conn_set = &mut connection_set.lock().unwrap().connections;
+
+            let messages: Vec<ListItem> = conn_set.iter_mut().map(|(addr, conn)| {
                 ListItem::new(vec![Spans::from(Span::raw(build_str(addr, conn)))])
             }).collect();
 
