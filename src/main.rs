@@ -180,8 +180,6 @@ fn main() -> Result<(), io::Error> {
         }
     });
 
-    println!("Starting http server");
-
     tui.run(read_end, move |connections| {
         if connection_set_needs_update.swap(false, Ordering::Relaxed) {
             connection_set.lock().unwrap().update(&connections);
@@ -190,12 +188,8 @@ fn main() -> Result<(), io::Error> {
 
     let _ = unistd::close(read_end);
 
-    println!("Http server is closing");
-
     let _ = thd.join();
     let _ = keys.join();
-
-    println!("Display thd joined");
 
     Ok(())
 }
