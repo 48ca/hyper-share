@@ -2,7 +2,7 @@ mod server;
 
 use clap::Clap;
 
-use std::path::Path;
+use std::path::{Path, Display};
 use std::fs::canonicalize;
 
 use std::io;
@@ -188,8 +188,9 @@ fn main() -> Result<(), io::Error> {
     let (tx, rx) = mpsc::channel();
 
     let connection_set_ptr = connection_set.clone();
+    let canon_path = canon_path.clone();
     let thd = thread::spawn(move || {
-        let _ = display(connection_set_ptr, rx, &needs_update_clone);
+        let _ = display(canon_path.display(), connection_set_ptr, rx, &needs_update_clone);
         let _ = unistd::write(write_end, "\0".as_bytes());
         let _ = unistd::close(write_end);
     });
@@ -245,7 +246,7 @@ fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
     ip_str
 }
 
-fn display(connection_set: Arc<Mutex<ConnectionSet>>, rx: mpsc::Receiver<ControlEvent>, needs_update: &AtomicBool) -> Result<(), io::Error> {
+fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mpsc::Receiver<ControlEvent>, needs_update: &AtomicBool) -> Result<(), io::Error> {
 
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);
@@ -269,13 +270,19 @@ fn display(connection_set: Arc<Mutex<ConnectionSet>>, rx: mpsc::Receiver<Control
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Percentage(90),
-                            Constraint::Percentage(10)
+                            Constraint::Percentage(10),
+                            Constraint::Percentage(90)
                         ].as_ref()
                     )
                     .split(f.size());
-                let block = List::new(messages).block(Block::default().borders(Borders::ALL).title("Connections"));
+
+                let block = List::new(
+                                vec![ListItem::new(vec![Spans::from(Span::raw(format!("Serving {}", root_path)))])]
+                            ).block(Block::default().borders(Borders::ALL).title("Information"));
                 f.render_widget(block, chunks[0]);
+
+                let block = List::new(messages).block(Block::default().borders(Borders::ALL).title("Connections"));
+                f.render_widget(block, chunks[1]);
             })?;
         }
 
