@@ -29,7 +29,7 @@ use simple_http::{
 const BUFFER_SIZE: usize = 4096;
 
 fn write_error(error_str: String) {
-    eprintln!("An error occurred: {}", error_str);
+    // eprintln!("An error occurred: {}", error_str);
 }
 
 fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
@@ -378,7 +378,7 @@ impl HttpTui<'_> {
                 let len = metadata.len() as usize;
                 (data, len, None/*Some("application/octet-stream")*/)
             } else {
-                let s: String = rendering::render_directory(canonical_path.as_path());
+                let s: String = rendering::render_directory(normalized_path, canonical_path.as_path());
                 let len = s.len();
                 let data = ResponseDataType::StringData(StringSegment {
                     data: SeekableString::new(s)
@@ -451,11 +451,9 @@ impl HttpTui<'_> {
     fn handle_conn_sigpipe(&self, conn: &mut HttpConnection) -> Result<(), io::Error> {
         match self.handle_conn(conn) {
             Err(error) => {
+                conn.state = ConnectionState::Closing;
                 match error.kind() {
-                    io::ErrorKind::BrokenPipe => {
-                        conn.state = ConnectionState::Closing;
-                        Ok(())
-                    },
+                    io::ErrorKind::BrokenPipe => Ok(()),
                     // Forward the error if it wasn't broken pipe
                     _ => Err(error)
                 }

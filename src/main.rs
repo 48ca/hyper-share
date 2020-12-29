@@ -43,6 +43,29 @@ struct Opts {
     host: String,
 }
 
+struct ConnectionSpeedMeasurement {
+    speeds: [f32; 3],
+    ind: usize,
+}
+
+impl ConnectionSpeedMeasurement {
+    pub fn new() -> ConnectionSpeedMeasurement {
+        return ConnectionSpeedMeasurement {
+            speeds: [0., 0., 0.],
+            ind: 0,
+        }
+    }
+
+    pub fn update(&mut self, speed: f32) {
+        self.speeds[self.ind] = speed;
+        self.ind = (self.ind+1) % 3;
+    }
+
+    pub fn get_avg(&self) -> f32 {
+        return (self.speeds[0] + self.speeds[1] + self.speeds[2])/3.;
+    }
+}
+
 struct Connection {
     addr: SocketAddr,
     bytes_sent: usize,
@@ -50,6 +73,7 @@ struct Connection {
     prev_bytes_sent: usize,
     update_time: time::Instant,
     prev_update_time: time::Instant,
+    avg_speed: ConnectionSpeedMeasurement,
 }
 
 impl Connection {
@@ -61,6 +85,7 @@ impl Connection {
             bytes_requested: 0,
             update_time: time::Instant::now(),
             prev_update_time: time::Instant::now(),
+            avg_speed: ConnectionSpeedMeasurement::new(),
         }
     }
 
@@ -76,11 +101,12 @@ impl Connection {
 
         let millis: u64 = 1000 * dur.as_secs() + (dur.subsec_nanos() as u64)/1000000;
         if millis == 0 { return 0.; }
-        let res = (self.bytes_sent - self.prev_bytes_sent) as f32 / (millis as f32) * 1000.0;
+        let speed = (self.bytes_sent - self.prev_bytes_sent) as f32 / (millis as f32) * 1000.0;
+        self.avg_speed.update(speed);
 
         self.prev_bytes_sent = self.bytes_sent;
 
-        res
+        self.avg_speed.get_avg()
     }
 }
 
@@ -243,18 +269,13 @@ fn display(connection_set: Arc<Mutex<ConnectionSet>>, rx: mpsc::Receiver<Control
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Percentage(10),
-                            Constraint::Percentage(80),
+                            Constraint::Percentage(90),
                             Constraint::Percentage(10)
                         ].as_ref()
                     )
                     .split(f.size());
-                let block = Block::default()
-                     .title("Block")
-                     .borders(Borders::ALL);
-                f.render_widget(block, chunks[0]);
                 let block = List::new(messages).block(Block::default().borders(Borders::ALL).title("Connections"));
-                f.render_widget(block, chunks[1]);
+                f.render_widget(block, chunks[0]);
             })?;
         }
 
