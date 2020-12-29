@@ -323,7 +323,7 @@ impl HttpTui<'_> {
         // If it was not, assume keep-alive is >= HTTP/1.1.
         conn.keep_alive = match req.get_header("connection") {
             Some(value) => value.to_lowercase() == "keep-alive",
-            None => req.version != HttpVersion::Http1_0
+            None => false,
         };
 
         if req.method.is_none() {

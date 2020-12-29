@@ -2,6 +2,8 @@ use std::io;
 use std::io::Write;
 use std::net::TcpStream;
 use std::cmp::min;
+use std::boxed::Box;
+use std::mem;
 
 #[derive(PartialEq)]
 pub enum HttpMethod {
@@ -145,28 +147,25 @@ pub struct HttpResponse {
     headers: HttpHeaderSet,
     headers_written: bool,
     last_write_length: usize,
+    buffer: Box<[u8; BUFFER_SIZE]>,
 }
 
 impl HttpResponse {
     pub fn new(status: HttpStatus, version: HttpVersion) -> HttpResponse {
+        let buf: [u8; BUFFER_SIZE] = unsafe { mem::MaybeUninit::uninit().assume_init() };
         HttpResponse {
             status: status,
             version: version,
             headers: HttpHeaderSet::new(),
             headers_written: false,
             last_write_length: BUFFER_SIZE,
+            buffer: Box::new(buf)
         }
     }
 
     pub fn add_header(&mut self, key: String, value: String) {
         self.headers.push(HttpHeader{ key: key, value: value });
     }
-
-    /*
-    pub fn set_content<'a>(&mut self, body: &'a mut dyn io::Read) {
-        self.body = Some(body);
-    }
-    */
 
     pub fn set_content_length(&mut self, size: usize) {
         self.headers.push(HttpHeader{ key: "Content-Length".to_string(), value: size.to_string() });
@@ -223,13 +222,12 @@ impl HttpResponse {
         T: io::Read + io::Seek
     {
         assert_eq!(self.headers_written, true);
-        let mut buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
         let write_length = min(self.last_write_length + 4096, BUFFER_SIZE);
-        let amt_read = body.read(&mut buffer[..write_length])?;
+        let amt_read = body.read(&mut self.buffer[..write_length])?;
         if amt_read == 0 { return Ok(0); }
         // HttpResponse::write_fully(&buffer[..amt_read], stream)?;
-        let amt_written = stream.write(&buffer[..amt_read])?;
-        if amt_written != amt_read {
+        let amt_written = stream.write(&self.buffer[..amt_read])?;
+        if amt_written < amt_read {
             body.seek(io::SeekFrom::Current((amt_read - amt_written) as i64))?;
         }
         self.last_write_length = amt_written;
