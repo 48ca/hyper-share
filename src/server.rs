@@ -19,11 +19,11 @@ use std::os::unix::prelude::RawFd;
 use std::path::Path;
 
 mod rendering;
-
 mod simple_http;
+
 use simple_http::{
-    HttpRequest, HttpResponse, HttpStatus, HttpVersion,
-    HttpMethod, status_to_code, status_to_message
+    HttpRequest, HttpResponse, HttpStatus,
+    HttpVersion, HttpMethod
 };
 
 const BUFFER_SIZE: usize = 4096;
@@ -225,7 +225,7 @@ impl HttpTui<'_> {
                             match self.handle_conn_sigpipe(&mut conn) {
                                 Ok(_) => {},
                                 Err(error) => {
-                                    let _ = self.write_error_response(HttpStatus::ServerError, conn);
+                                    let _ = self.write_error_response(HttpStatus::ServerError, conn, Some(&error.to_string()));
                                     write_error(format!("Server error while reading: {}", error));
                                 }
                             };
@@ -273,7 +273,7 @@ impl HttpTui<'_> {
                         } else {
                             // Ignore the return value of write_error_response, because
                             // we're closing the connection anyway.
-                            let _ = self.write_error_response(HttpStatus::ServerError, connections.get_mut(&fd).unwrap());
+                            let _ = self.write_error_response(HttpStatus::ServerError, connections.get_mut(&fd).unwrap(), Some("Peer socket in error state"));
                             println!("Got bad state on client socket");
                             connections.remove(&fd);
                         }
@@ -315,7 +315,7 @@ impl HttpTui<'_> {
         let req: HttpRequest = match decode_request(body) {
             Ok(r) => r,
             Err(status) => {
-                return self.write_error_response(status, conn);
+                return self.write_error_response(status, conn, None);
             }
         };
 
@@ -327,7 +327,7 @@ impl HttpTui<'_> {
         };
 
         if req.method.is_none() {
-            return self.write_error_response(HttpStatus::NotImplemented, conn);
+            return self.write_error_response(HttpStatus::NotImplemented, conn, None);
         }
 
         let normalized_path = if req.path.starts_with("/") {
@@ -342,7 +342,7 @@ impl HttpTui<'_> {
                 // Attempt to convert the system error into an HTTP error
                 // that we can send back to the user.
                 return match resolve_io_error(&error) {
-                    Some(http_error) => self.write_error_response(http_error, conn),
+                    Some(http_error) => self.write_error_response(http_error, conn, None),
                     None => Err(error),
                 };
             }
@@ -352,13 +352,13 @@ impl HttpTui<'_> {
         if !canonical_path.starts_with(self.root_dir) {
             // Use 404 so that the user cannot determine if directories
             // exist or not.
-            return self.write_error_response(HttpStatus::NotFound, conn);
+            return self.write_error_response(HttpStatus::NotFound, conn, None);
         }
 
         let metadata = match fs::metadata(&canonical_path) {
             Err(error) => {
                 return match resolve_io_error(&error) {
-                    Some(http_error) => self.write_error_response(http_error, conn),
+                    Some(http_error) => self.write_error_response(http_error, conn, None),
                     None => Err(error),
                 };
             }
@@ -366,7 +366,7 @@ impl HttpTui<'_> {
         };
 
         if !metadata.is_file() && !metadata.is_dir() {
-            return self.write_error_response(HttpStatus::PermissionDenied, conn);
+            return self.write_error_response(HttpStatus::PermissionDenied, conn, None);
         }
 
         let mut resp = HttpResponse::new(HttpStatus::OK, req.version);
@@ -476,10 +476,8 @@ impl HttpTui<'_> {
         Ok(())
     }
 
-    fn write_error_response(&self, status: HttpStatus, mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
-        let body = format!("<html><body><h1>{} {}</h1></body></html>",
-                           status_to_code(&status),
-                           status_to_message(&status));
+    fn write_error_response(&self, status: HttpStatus, mut conn: &mut HttpConnection, msg: Option<&str>) -> Result<ConnectionState, io::Error> {
+        let body: String = rendering::render_error(&status, msg);
         let mut resp = HttpResponse::new(status, HttpVersion::Http1_0);
         resp.set_content_length(body.len());
         resp.add_header("Connection".to_string(),
