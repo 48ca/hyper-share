@@ -88,19 +88,21 @@ impl HtmlElement {
 
 
 pub fn render_directory(relative_path: &str, path: &Path) -> String {
-    let mut s = String::new();
-    s.push_str("<html><head>");
-    s.push_str("</head><body>");
+    let mut html = HtmlElement::new("html", true);
+    let mut body = HtmlElement::new("body", true);
     let paths = fs::read_dir(path).unwrap();
     for path in paths {
         let fname = path.unwrap().file_name();
-        let anch = format!("<a href='/{}{}{}'>{}</a>", relative_path, if relative_path.len() > 0 { "/" } else { "" },  fname.to_str().unwrap(), fname.to_str().unwrap());
-        s.push_str(&anch);
-        s.push_str("</i><br>");
+        let href = format!("/{}{}{}", relative_path, if relative_path.len() > 0 { "/" } else { "" },  fname.to_str().unwrap());
+        let text = fname.to_str().unwrap();
+        let mut a = HtmlElement::new("a", true);
+        a.add_attribute("href".to_string(), href);
+        a.add_text(text.to_string());
+        body.add_child(a);
+        body.add_child(HtmlElement::new("br", false));
     }
-    s.push_str("</body></html>");
-
-    return s;
+    html.add_child(body);
+    html.render()
 }
 
 pub fn render_error(status: &simple_http::HttpStatus, msg: Option<&str>) -> String {
