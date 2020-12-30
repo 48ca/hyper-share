@@ -86,14 +86,49 @@ impl HtmlElement {
     }
 }
 
+fn generate_default_footer() -> HtmlElement {
+    let mut footer = HtmlElement::new("footer", true);
+    let hr = HtmlElement::new("hr", false);
+    let mut p = HtmlElement::new("p", true);
+    let mut i = HtmlElement::new("i", true);
+    i.add_text("Rendered with httptui".to_string());
+    p.add_child(i);
+
+    footer.add_child(hr);
+    footer.add_child(p);
+    footer
+}
+
+fn generate_href(relative_path: &str, fname: &str) -> String {
+    if relative_path.ends_with("/") {
+        format!("/{}{}", relative_path, fname)
+    } else {
+        format!("/{}{}{}", relative_path, if relative_path.len() > 0 { "/" } else { "" }, fname)
+    }
+}
 
 pub fn render_directory(relative_path: &str, path: &Path) -> String {
     let mut html = HtmlElement::new("html", true);
     let mut body = HtmlElement::new("body", true);
+    let mut h1 = HtmlElement::new("h1", true);
+    h1.add_text(format!("Directory listing for /{}", relative_path));
+    body.add_child(h1);
+    body.add_child(HtmlElement::new("hr", false));
+    let top_level = relative_path.len() == 0;
+    if !top_level {
+        let mut a = HtmlElement::new("a", true);
+        let href = generate_href(relative_path, "..");
+        a.add_attribute("href".to_string(), href);
+        let mut i = HtmlElement::new("i", true);
+        i.add_text("Up a directory".to_string());
+        a.add_child(i);
+        body.add_child(a);
+        body.add_child(HtmlElement::new("br", false));
+    }
     let paths = fs::read_dir(path).unwrap();
     for path in paths {
         let fname = path.unwrap().file_name();
-        let href = format!("/{}{}{}", relative_path, if relative_path.len() > 0 { "/" } else { "" },  fname.to_str().unwrap());
+        let href = generate_href(relative_path, fname.to_str().unwrap());
         let text = fname.to_str().unwrap();
         let mut a = HtmlElement::new("a", true);
         a.add_attribute("href".to_string(), href);
@@ -101,6 +136,8 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
         body.add_child(a);
         body.add_child(HtmlElement::new("br", false));
     }
+
+    body.add_child(generate_default_footer());
     html.add_child(body);
     html.render()
 }
@@ -121,6 +158,8 @@ pub fn render_error(status: &simple_http::HttpStatus, msg: Option<&str>) -> Stri
         }
         None => {},
     }
+
+    body.add_child(generate_default_footer());
     html.add_child(body);
     html.render()
 }
