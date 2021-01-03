@@ -94,18 +94,10 @@ impl Seek for SeekableString {
     }
 }
 
-pub struct StringSegment {
-    pub data: SeekableString,
-}
-
-pub struct FileSegment {
-    pub data: fs::File,
-}
-
 pub enum ResponseDataType {
     None,
-    StringData(StringSegment),
-    FileData(FileSegment),
+    StringSegment(SeekableString),
+    FileSegment(fs::File),
 }
 
 pub struct HttpConnection {
@@ -373,18 +365,21 @@ impl HttpTui<'_> {
         }
 
         let mut resp = HttpResponse::new(HttpStatus::OK, req.version);
+        resp.add_header("Server".to_string(), "http-tui".to_string());
+        resp.add_header("Accept-Ranges".to_string(), "bytes".to_string());
+
+        /*
+        if let Some(range) = req.get_header("Range") {
+        }
+        */
 
         let (response_data, content_length, mime) = if metadata.is_dir() {
                 let s: String = rendering::render_directory(normalized_path, canonical_path.as_path());
                 let len = s.len();
-                let data = ResponseDataType::StringData(StringSegment {
-                    data: SeekableString::new(s)
-                });
+                let data = ResponseDataType::StringSegment(SeekableString::new(s));
                 (data, len, Some("text/html"))
             } else {
-                let data = ResponseDataType::FileData(FileSegment {
-                    data: fs::File::open(&canonical_path)?
-                });
+                let data = ResponseDataType::FileSegment(fs::File::open(&canonical_path)?);
                 let len = if metadata.is_file() {
                     metadata.len() as usize
                 } else {
@@ -423,11 +418,11 @@ impl HttpTui<'_> {
         let done = match &mut conn.response {
             Some(ref mut resp) => {
                 let amt_written = match &mut conn.response_data {
-                    ResponseDataType::StringData(seg) => {
-                        resp.partial_write_to_stream(&mut seg.data, &conn.stream)?
+                    ResponseDataType::StringSegment(ref mut seg) => {
+                        resp.partial_write_to_stream(seg, &conn.stream)?
                     }
-                    ResponseDataType::FileData(seg) => {
-                        resp.partial_write_to_stream(&mut seg.data, &conn.stream)?
+                    ResponseDataType::FileSegment(ref mut file) => {
+                        resp.partial_write_to_stream(file, &conn.stream)?
                     }
                     ResponseDataType::None => 0
                 };
@@ -486,6 +481,7 @@ impl HttpTui<'_> {
     fn write_error_response(&self, status: HttpStatus, mut conn: &mut HttpConnection, msg: Option<&str>) -> Result<ConnectionState, io::Error> {
         let body: String = rendering::render_error(&status, msg);
         let mut resp = HttpResponse::new(status, HttpVersion::Http1_0);
+        resp.add_header("Server".to_string(), "http-tui".to_string());
         resp.set_content_length(body.len());
         resp.add_header("Connection".to_string(),
                         if conn.keep_alive { "keep-alive".to_string() }
@@ -495,9 +491,7 @@ impl HttpTui<'_> {
         // Add content-length to bytes requested
         conn.bytes_requested += body.len();
 
-        let data = ResponseDataType::StringData(StringSegment {
-            data: SeekableString::new(body)
-        });
+        let data = ResponseDataType::StringSegment(SeekableString::new(body));
 
         // Write headers
         resp.write_headers_to_stream(&conn.stream)?;
