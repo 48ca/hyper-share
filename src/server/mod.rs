@@ -437,10 +437,8 @@ impl HttpTui<'_> {
                 // (data, len, None)
                 (data, len, if req.path.ends_with(".html") {
                     Some("text/html")
-                } else if req.path.ends_with(".mp4") {
-                    Some("video/mp4")
                 } else {
-                    Some("application/octet-stream")
+                    None
                 })
             };
 
