@@ -4,7 +4,7 @@ mod http;
 use std::net::TcpListener;
 use std::net::TcpStream;
 
-use std::cmp::min;
+use std::cmp::{max, min};
 
 use std::io;
 use std::io::{Read,Seek,SeekFrom};
@@ -83,7 +83,7 @@ fn decode_content_range(range_str: &str) -> Option<ContentRange> {
         } else {
             Some(ContentRange {
                 start: start_int,
-                len: Some(end_i - start_int)
+                len: Some(1 + end_i - start_int)
             })
         }
     } else {
@@ -474,7 +474,7 @@ impl HttpTui<'_> {
         resp.set_content_length(range);
 
         if used_range {
-            resp.add_header("Content-Range".to_string(), format!("bytes {}-{}/{}", start, start + range - 1, full_length));
+            resp.add_header("Content-Range".to_string(), format!("bytes {}-{}/{}", start, max(start, start + range - 1), full_length));
             match response_data {
                 ResponseDataType::StringSegment(ref mut seg) => {
                     seg.seek(io::SeekFrom::Start((start) as u64))?;
