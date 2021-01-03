@@ -4,6 +4,8 @@ mod http;
 use std::net::TcpListener;
 use std::net::TcpStream;
 
+use std::cmp::min;
+
 use std::io;
 use std::io::{Read,Seek,SeekFrom};
 
@@ -33,6 +35,62 @@ fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
         io::ErrorKind::NotFound => Some(HttpStatus::NotFound),
         io::ErrorKind::PermissionDenied => Some(HttpStatus::PermissionDenied),
         _ => None
+    }
+}
+
+struct ContentRange {
+    pub start: usize,
+    pub len: Option<usize>,
+}
+
+fn decode_content_range(range_str: &str) -> Option<ContentRange> {
+    if !range_str.starts_with("bytes=") {
+        return None;
+    }
+    let eq_ind = match range_str.find('=') {
+        Some(i) => i,
+        _ => { return None; }
+    };
+    let dash_ind = match range_str.find('-') {
+        Some(i) => i,
+        _ => { return None; }
+    };
+
+    let start_str = &range_str[eq_ind + 1..dash_ind];
+    let end_str = &range_str[dash_ind + 1..];
+
+    let start_int: usize = if start_str.len() > 0 {
+        match start_str.parse() {
+            Ok(i) => i,
+            _ => { return None; }
+        }
+    } else {
+        0
+    };
+
+    let end_int: Option<usize> = if end_str.len() > 0 {
+        match end_str.parse() {
+            Ok(i) => Some(i),
+            _ => { return None; }
+        }
+    } else {
+        None
+    };
+
+    if let Some(end_i) = end_int {
+        if end_i == 0 || start_int > end_i {
+            None
+        } else {
+            Some(ContentRange {
+                start: start_int,
+                len: Some(end_i - start_int)
+            })
+        }
+    } else {
+        Some(ContentRange {
+            start: start_int,
+            len: None,
+        })
     }
 }
 
@@ -364,16 +422,7 @@ impl HttpTui<'_> {
             return self.write_error_response(HttpStatus::PermissionDenied, conn, Some(&format!("Attempted to read an irregular file.")));
         }
 
-        let mut resp = HttpResponse::new(HttpStatus::OK, req.version);
-        resp.add_header("Server".to_string(), "http-tui".to_string());
-        resp.add_header("Accept-Ranges".to_string(), "bytes".to_string());
-
-        /*
-        if let Some(range) = req.get_header("Range") {
-        }
-        */
-
-        let (response_data, content_length, mime) = if metadata.is_dir() {
+        let (mut response_data, full_length, mime) = if metadata.is_dir() {
                 let s: String = rendering::render_directory(normalized_path, canonical_path.as_path());
                 let len = s.len();
                 let data = ResponseDataType::StringSegment(SeekableString::new(s));
@@ -385,10 +434,58 @@ impl HttpTui<'_> {
                 } else {
                     std::u32::MAX as usize
                 };
-                (data, len, None/*Some("application/octet-stream")*/)
+                // (data, len, None)
+                (data, len, if req.path.ends_with(".html") {
+                    Some("text/html")
+                } else if req.path.ends_with(".mp4") {
+                    Some("video/mp4")
+                } else {
+                    Some("application/octet-stream")
+                })
             };
 
-        resp.set_content_length(content_length);
+        let (start, range, used_range) = match req.get_header("range") {
+            Some(content_range_str) => {
+                if let Some(content_range) = decode_content_range(content_range_str) {
+                    let real_start = min(content_range.start, full_length);
+                    let real_len = match content_range.len {
+                        Some(len) => min(len, full_length - real_start),
+                        None => full_length - real_start
+                    };
+                    (real_start, real_len, true)
+                } else {
+                    return self.write_error_response(HttpStatus::BadRequest, conn, Some(&format!("Could not decode Range header")));
+                }
+            },
+            None => {
+                (0, full_length, false)
+            }
+        };
+
+        let mut resp = HttpResponse::new(if used_range {
+                HttpStatus::PartialContent
+            } else {
+                HttpStatus::OK
+            }, &req.version);
+
+        resp.add_header("Server".to_string(), "http-tui".to_string());
+        resp.add_header("Accept-Ranges".to_string(), "bytes".to_string());
+
+        resp.set_content_length(range);
+
+        if used_range {
+            resp.add_header("Content-Range".to_string(), format!("bytes {}-{}/{}", start, start + range - 1, full_length));
+            match response_data {
+                ResponseDataType::StringSegment(ref mut seg) => {
+                    seg.seek(io::SeekFrom::Start((start) as u64))?;
+                },
+                ResponseDataType::FileSegment(ref mut file) => {
+                    file.seek(io::SeekFrom::Start((start) as u64))?;
+                },
+                _ => {},
+            }
+        }
+
         resp.add_header("Connection".to_string(),
                         if conn.keep_alive { "keep-alive".to_string() }
                         else { "close".to_string() });
@@ -404,7 +501,7 @@ impl HttpTui<'_> {
 
         conn.response_data = match req.method.unwrap() {
             HttpMethod::GET => {
-                conn.bytes_requested += content_length;
+                conn.bytes_requested += range;
                 response_data 
             }
             HttpMethod::HEAD => ResponseDataType::None
@@ -480,7 +577,7 @@ impl HttpTui<'_> {
 
     fn write_error_response(&self, status: HttpStatus, mut conn: &mut HttpConnection, msg: Option<&str>) -> Result<ConnectionState, io::Error> {
         let body: String = rendering::render_error(&status, msg);
-        let mut resp = HttpResponse::new(status, HttpVersion::Http1_0);
+        let mut resp = HttpResponse::new(status, &HttpVersion::Http1_0);
         resp.add_header("Server".to_string(), "http-tui".to_string());
         resp.set_content_length(body.len());
         resp.add_header("Connection".to_string(),

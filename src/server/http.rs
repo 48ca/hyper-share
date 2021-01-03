@@ -11,7 +11,7 @@ pub enum HttpMethod {
     HEAD,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum HttpVersion {
     Http1_0,
     Http1_1,
@@ -24,10 +24,11 @@ pub fn version_to_str(v: &HttpVersion) -> &'static str {
     }
 }
 
-pub const BUFFER_SIZE: usize = 1024 * 1024;
+pub const BUFFER_SIZE: usize = 4096 * 1024;
 
 pub enum HttpStatus {
     OK,                      // 200
+    PartialContent,          // 206
     BadRequest,              // 401
     PermissionDenied,        // 403
     NotFound,                // 404
@@ -40,6 +41,7 @@ pub enum HttpStatus {
 pub fn status_to_code(status: &HttpStatus) -> u16 {
     match status {
         HttpStatus::OK                      => 200,
+        HttpStatus::PartialContent          => 206,
         HttpStatus::BadRequest              => 401,
         HttpStatus::PermissionDenied        => 403,
         HttpStatus::NotFound                => 404,
@@ -53,6 +55,7 @@ pub fn status_to_code(status: &HttpStatus) -> u16 {
 pub fn status_to_message(status: &HttpStatus) -> &'static str {
     match status {
         HttpStatus::OK                      => "OK",
+        HttpStatus::PartialContent          => "Partial Content",
         HttpStatus::BadRequest              => "Bad request",
         HttpStatus::PermissionDenied        => "Permission denied",
         HttpStatus::NotFound                => "Not found",
@@ -148,18 +151,20 @@ pub struct HttpResponse {
     headers_written: bool,
     last_write_length: usize,
     buffer: Box<[u8; BUFFER_SIZE]>,
+    bytes_to_write: usize,
 }
 
 impl HttpResponse {
-    pub fn new(status: HttpStatus, version: HttpVersion) -> HttpResponse {
+    pub fn new(status: HttpStatus, version: &HttpVersion) -> HttpResponse {
         let buf: [u8; BUFFER_SIZE] = unsafe { mem::MaybeUninit::uninit().assume_init() };
         HttpResponse {
             status: status,
-            version: version,
+            version: version.clone(),
             headers: HttpHeaderSet::new(),
             headers_written: false,
             last_write_length: BUFFER_SIZE,
-            buffer: Box::new(buf)
+            buffer: Box::new(buf),
+            bytes_to_write: 0,
         }
     }
 
@@ -169,6 +174,7 @@ impl HttpResponse {
 
     pub fn set_content_length(&mut self, size: usize) {
         self.headers.push(HttpHeader{ key: "Content-Length".to_string(), value: size.to_string() });
+        self.bytes_to_write = size;
     }
 
     #[allow(dead_code)]
@@ -218,7 +224,8 @@ impl HttpResponse {
         T: io::Read + io::Seek
     {
         assert_eq!(self.headers_written, true);
-        let write_length = min(self.last_write_length + 4096, BUFFER_SIZE);
+        let write_length = min(self.bytes_to_write, BUFFER_SIZE);
+        // let write_length = min(self.last_write_length + 4096, BUFFER_SIZE);
         let amt_read = body.read(&mut self.buffer[..write_length])?;
         if amt_read == 0 { return Ok(0); }
         // HttpResponse::write_fully(&buffer[..amt_read], stream)?;
@@ -227,6 +234,7 @@ impl HttpResponse {
             body.seek(io::SeekFrom::Current((amt_read - amt_written) as i64))?;
         }
         self.last_write_length = amt_written;
+        self.bytes_to_write -= amt_written;
         Ok(amt_written)
     }
 }
