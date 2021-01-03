@@ -1,3 +1,6 @@
+mod rendering;
+mod http;
+
 use std::net::TcpListener;
 use std::net::TcpStream;
 
@@ -18,19 +21,12 @@ use std::os::unix::prelude::RawFd;
 
 use std::path::Path;
 
-mod rendering;
-mod simple_http;
-
-use simple_http::{
+use http::{
     HttpRequest, HttpResponse, HttpStatus,
     HttpVersion, HttpMethod
 };
 
 const BUFFER_SIZE: usize = 4096;
-
-fn write_error(error_str: String) {
-    // eprintln!("An error occurred: {}", error_str);
-}
 
 fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
     match error.kind() {
@@ -43,8 +39,8 @@ fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
 fn decode_request(req_body: &[u8]) -> Result<HttpRequest, HttpStatus> {
     let request_str = match from_utf8(req_body) {
         Ok(dec) => dec,
-        Err(err) => {
-            write_error(format!("Could not decode request: {}", err));
+        Err(_err) => {
+            // write_error(format!("Could not decode request: {}", err));
             return Err(HttpStatus::BadRequest);
         }
     };
@@ -124,6 +120,8 @@ pub struct HttpConnection {
     pub response_data: ResponseDataType,
     pub response: Option<HttpResponse>,
 
+    pub last_requested_uri: Option<String>,
+
     pub keep_alive: bool,
 
     pub bytes_requested: usize,
@@ -142,6 +140,7 @@ impl HttpConnection {
             keep_alive: true,
             bytes_requested: 0,
             bytes_sent: 0,
+            last_requested_uri: None,
         }
     }
 
@@ -216,7 +215,8 @@ impl HttpTui<'_> {
                                     let conn = HttpTui::create_http_connection(stream);
                                     connections.insert(conn.stream.as_raw_fd(), conn);
                                 }
-                                Err(e) => write_error(e.to_string()),
+                                _ => {},
+                                // Err(e) => write_error(e.to_string()),
                             }
                         } else {
                             assert_eq!(connections[&fd].state, ConnectionState::ReadingRequest);
@@ -226,7 +226,7 @@ impl HttpTui<'_> {
                                 Ok(_) => {},
                                 Err(error) => {
                                     let _ = self.write_error_response(HttpStatus::ServerError, conn, Some(&error.to_string()));
-                                    write_error(format!("Server error while reading: {}", error));
+                                    // write_error(format!("Server error while reading: {}", error));
                                 }
                             };
                             if connections[&fd].state == ConnectionState::Closing {
@@ -246,9 +246,8 @@ impl HttpTui<'_> {
                         assert_eq!(connections[&fd].state, ConnectionState::WritingResponse);
                         match self.handle_conn_sigpipe(&mut connections.get_mut(&fd).unwrap()) {
                             Ok(_) => {},
-                            Err(error) => {
-                                write_error(format!("Server error while writing: {}", error));
-                            }
+                            _ => {},
+                            // Err(error) => { write_error(format!("Server error while writing: {}", error)); }
                         }
                         if connections[&fd].state == ConnectionState::Closing {
                             // Delete to close connection
@@ -289,9 +288,11 @@ impl HttpTui<'_> {
         let buffer = &mut conn.buffer;
         let bytes_read = match conn.stream.read(&mut buffer[conn.bytes_read..]) {
             Ok(size) => size,
-            Err(err) => {
+            Err(_err) => {
+                /*
                 write_error(format!(
                     "Failed to read bytes from socket: {}", err));
+                */
                 // Even though the server has run into a problem, because it is
                 // a problem inherent to the socket connection, we return Ok
                 // so that we do not write an HTTP error response to the socket.
@@ -318,6 +319,8 @@ impl HttpTui<'_> {
                 return self.write_error_response(status, conn, None);
             }
         };
+
+        conn.last_requested_uri = Some(req.path.to_string());
 
         // Check if keep-alive header was given in the request.
         // If it was not, assume keep-alive is >= HTTP/1.1.
@@ -366,24 +369,28 @@ impl HttpTui<'_> {
         };
 
         if !metadata.is_file() && !metadata.is_dir() {
-            return self.write_error_response(HttpStatus::PermissionDenied, conn, None);
+            return self.write_error_response(HttpStatus::PermissionDenied, conn, Some(&format!("Attempted to read an irregular file.")));
         }
 
         let mut resp = HttpResponse::new(HttpStatus::OK, req.version);
 
-        let (response_data, content_length, mime) = if metadata.is_file() {
-                let data = ResponseDataType::FileData(FileSegment {
-                    data: fs::File::open(&canonical_path)?
-                });
-                let len = metadata.len() as usize;
-                (data, len, None/*Some("application/octet-stream")*/)
-            } else {
+        let (response_data, content_length, mime) = if metadata.is_dir() {
                 let s: String = rendering::render_directory(normalized_path, canonical_path.as_path());
                 let len = s.len();
                 let data = ResponseDataType::StringData(StringSegment {
                     data: SeekableString::new(s)
                 });
                 (data, len, Some("text/html"))
+            } else {
+                let data = ResponseDataType::FileData(FileSegment {
+                    data: fs::File::open(&canonical_path)?
+                });
+                let len = if metadata.is_file() {
+                    metadata.len() as usize
+                } else {
+                    std::u32::MAX as usize
+                };
+                (data, len, None/*Some("application/octet-stream")*/)
             };
 
         resp.set_content_length(content_length);

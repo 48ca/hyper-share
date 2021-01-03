@@ -213,10 +213,6 @@ impl HttpResponse {
         Ok(())
     }
 
-    pub fn chunk_size(&self) -> usize {
-        return self.last_write_length;
-    }
-
     pub fn partial_write_to_stream<T>(&mut self, body: &mut T, mut stream: &TcpStream) -> Result<usize, io::Error>
     where
         T: io::Read + io::Seek

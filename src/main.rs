@@ -1,5 +1,3 @@
-mod server;
-
 use clap::Clap;
 
 use std::path::{Path, Display};
@@ -26,7 +24,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time;
 
-use crate::server::HttpConnection;
+mod server;
+use server::{HttpConnection, HttpTui};
 
 use std::net::SocketAddr;
 
@@ -74,6 +73,7 @@ struct Connection {
     update_time: time::Instant,
     prev_update_time: time::Instant,
     avg_speed: ConnectionSpeedMeasurement,
+    last_requested_uri: String,
 }
 
 impl Connection {
@@ -86,12 +86,16 @@ impl Connection {
             update_time: time::Instant::now(),
             prev_update_time: time::Instant::now(),
             avg_speed: ConnectionSpeedMeasurement::new(),
+            last_requested_uri: "[Reading...]".to_string(),
         }
     }
 
     pub fn update(&mut self, conn: &HttpConnection) {
         self.bytes_sent = conn.bytes_sent;
         self.bytes_requested = conn.bytes_requested;
+        if let Some(uri) = &conn.last_requested_uri {
+            self.last_requested_uri = uri.clone();
+        }
     }
 
     pub fn estimated_speed(&mut self) -> f32 {
@@ -164,7 +168,7 @@ fn main() -> Result<(), io::Error> {
             return Ok(())
         }
     };
-    let mut tui = match server::HttpTui::new(&opts.host, opts.port, &canon_path.as_path()) {
+    let mut tui = match HttpTui::new(&opts.host, opts.port, &canon_path.as_path()) {
         Ok(tui) => tui,
         Err(e) => {
             eprintln!("Failed to bind to port {}: {}", opts.port, e);
@@ -228,15 +232,17 @@ fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
     let speed = conn.estimated_speed();
     let ip_str = match addr {
         SocketAddr::V4(v4_addr) => {
-            format!("{host}:{port} => {sent}/{reqd} ({perc}% {speed} MiB/s)",
+            format!("{host}:{port} {uri} => {sent}/{reqd}\r\n\t >> ({perc}% {speed} MiB/s)",
                     host=v4_addr.ip(), port=v4_addr.port(),
+                    uri=conn.last_requested_uri,
                     sent=conn.bytes_sent, reqd=conn.bytes_requested,
                     perc=perc,
                     speed=speed / (1024. * 1024.))
         }
         SocketAddr::V6(v6_addr) => {
-            format!("[{host}:{port}] => {sent}/{reqd} ({perc}% {speed} MiB/s)",
+            format!("[{host}:{port}] {uri} => {sent}/{reqd}\r\n\t >> ({perc}% {speed} MiB/s)",
                     host=v6_addr.ip(), port=v6_addr.port(),
+                    uri=conn.last_requested_uri,
                     sent=conn.bytes_sent, reqd=conn.bytes_requested,
                     perc=perc,
                     speed=speed / (1024. * 1024.))
@@ -255,7 +261,10 @@ fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mp
 
     'outer: loop {
         // if needs_update was false, it has been updated
-        if !needs_update.swap(true, Ordering::Relaxed) {
+        // if !needs_update.swap(true, Ordering::Relaxed) {
+        if true {
+
+            needs_update.store(true, Ordering::Relaxed);
 
             // Print that the connection has been established
             let conn_set = &mut connection_set.lock().unwrap().connections;

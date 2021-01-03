@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::fs;
 
-use crate::server::simple_http;
+use crate::server::http;
 
 struct HtmlElement {
     tag: &'static str,
@@ -125,33 +125,77 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
         body.add_child(a);
         body.add_child(HtmlElement::new("br", false));
     }
-    let paths = fs::read_dir(path).unwrap();
-    for path in paths {
-        let fname = path.unwrap().file_name();
-        let href = generate_href(relative_path, fname.to_str().unwrap());
-        let text = fname.to_str().unwrap();
-        let mut a = HtmlElement::new("a", true);
-        a.add_attribute("href".to_string(), href);
-        a.add_text(text.to_string());
-        body.add_child(a);
-        body.add_child(HtmlElement::new("br", false));
-    }
+    if let Ok(paths) = fs::read_dir(path) {
+        let mut table = HtmlElement::new("table", true);
+        for path in paths {
+            let entry = match path {
+                Ok(p) => p,
+                _ => { continue; }
+            };
+            let fname = entry.file_name();
+            let fname_str = match fname.to_str() {
+                Some(f) => f,
+                _ => { continue; }
+            };
+            let mut tr = HtmlElement::new("tr", true);
 
-    body.add_child(generate_default_footer());
-    html.add_child(body);
-    html.render()
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                _ => { continue; }
+            };
+
+            let mut td_type = HtmlElement::new("td", true);
+            let mut td_a = HtmlElement::new("td", true);
+            let mut td_size = HtmlElement::new("td", true);
+
+            // Add pre
+            let mut pre_type = HtmlElement::new("pre", true);
+            pre_type.add_text(if meta.is_dir() {
+                "[DIR]".to_string()
+            } else {
+                "[FILE]".to_string()
+            });
+            pre_type.add_attribute("style".to_string(), "display: block; text-align: center;".to_string());
+            td_type.add_child(pre_type);
+
+            // Add anchor
+            let href = generate_href(relative_path, fname_str);
+            let mut a = HtmlElement::new("a", true);
+            a.add_attribute("href".to_string(), href);
+            a.add_text(fname_str.to_string());
+            td_a.add_child(a);
+
+            // Add size
+            let mut pre_size = HtmlElement::new("pre", true);
+            pre_size.add_text(format!("{} B", meta.len()));
+            pre_size.add_attribute("style".to_string(), "display: block; text-align: right;".to_string());
+            td_size.add_child(pre_size);
+
+            tr.add_child(td_type);
+            tr.add_child(td_a);
+            tr.add_child(td_size);
+
+            table.add_child(tr);
+        }
+        body.add_child(table);
+        body.add_child(generate_default_footer());
+        html.add_child(body);
+        html.render()
+    } else {
+        "Error reading directory".to_string()
+    }
 }
 
-pub fn render_error(status: &simple_http::HttpStatus, msg: Option<&str>) -> String {
+pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
     let mut html = HtmlElement::new("html", true);
     let mut body = HtmlElement::new("body", true);
     let mut h1 = HtmlElement::new("h1", true);
-    h1.add_text(format!("{} {}", simple_http::status_to_code(status), simple_http::status_to_message(status)));
+    h1.add_text(format!("{} {}", http::status_to_code(status), http::status_to_message(status)));
     body.add_child(h1);
 
     match msg {
         Some(msg) => {
-            let mut p = HtmlElement::new("p", true);
+            let mut p = HtmlElement::new("pre", true);
             p.add_text(msg.to_string());
             p.add_class("error");
             body.add_child(p);
