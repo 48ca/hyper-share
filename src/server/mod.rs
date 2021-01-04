@@ -551,7 +551,9 @@ impl HttpTui<'_> {
                 conn.state = ConnectionState::Closing;
                 match error.kind() {
                     io::ErrorKind::BrokenPipe => Ok(()),
-                    // Forward the error if it wasn't broken pipe
+                    io::ErrorKind::ConnectionReset => Ok(()),
+                    io::ErrorKind::ConnectionAborted => Ok(()),
+                    // Forward the error if it isn't one of the above
                     _ => Err(error)
                 }
             },
