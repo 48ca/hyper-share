@@ -3,6 +3,8 @@ use std::fs;
 
 use crate::server::http;
 
+const GIT_HASH: &'static str = env!("GIT_HASH");
+
 struct HtmlElement {
     tag: &'static str,
     attributes: Vec<(String, String)>,
@@ -89,13 +91,11 @@ impl HtmlElement {
 fn generate_default_footer() -> HtmlElement {
     let mut footer = HtmlElement::new("footer", true);
     let hr = HtmlElement::new("hr", false);
-    let mut p = HtmlElement::new("p", true);
-    let mut i = HtmlElement::new("i", true);
-    i.add_text("Rendered with httptui".to_string());
-    p.add_child(i);
+    let mut pre = HtmlElement::new("pre", true);
+    pre.add_text(format!("Rendered with httptui revision {}.", GIT_HASH));
 
     footer.add_child(hr);
-    footer.add_child(p);
+    footer.add_child(pre);
     footer
 }
 
@@ -167,7 +167,9 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
 
             // Add size
             let mut pre_size = HtmlElement::new("pre", true);
-            pre_size.add_text(format!("{} B", meta.len()));
+            if meta.is_file() {
+                pre_size.add_text(format!("{}", meta.len()));
+            }
             pre_size.add_attribute("style".to_string(), "display: block; text-align: right;".to_string());
             td_size.add_child(pre_size);
 
@@ -190,8 +192,11 @@ pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
     let mut html = HtmlElement::new("html", true);
     let mut body = HtmlElement::new("body", true);
     let mut h1 = HtmlElement::new("h1", true);
+
     h1.add_text(format!("{} {}", http::status_to_code(status), http::status_to_message(status)));
     body.add_child(h1);
+
+    body.add_child(HtmlElement::new("hr", false));
 
     match msg {
         Some(msg) => {

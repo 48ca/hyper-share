@@ -74,6 +74,7 @@ struct Connection {
     prev_update_time: time::Instant,
     avg_speed: ConnectionSpeedMeasurement,
     last_requested_uri: String,
+    num_requests: usize,
 }
 
 impl Connection {
@@ -87,15 +88,21 @@ impl Connection {
             prev_update_time: time::Instant::now(),
             avg_speed: ConnectionSpeedMeasurement::new(),
             last_requested_uri: "[Reading...]".to_string(),
+            num_requests: 0,
         }
     }
 
-    pub fn update(&mut self, conn: &HttpConnection) {
+    pub fn update(&mut self, conn: &HttpConnection) -> bool {
         self.bytes_sent = conn.bytes_sent;
         self.bytes_requested = conn.bytes_requested;
         if let Some(uri) = &conn.last_requested_uri {
-            self.last_requested_uri = uri.clone();
+            if self.num_requests < conn.num_requests {
+                self.last_requested_uri = uri.clone();
+                self.num_requests = conn.num_requests;
+                return true;
+            }
         }
+        false
     }
 
     pub fn estimated_speed(&mut self) -> f32 {
@@ -114,15 +121,104 @@ impl Connection {
     }
 }
 
+struct History {
+    history: Vec<Option<String>>,
+    history_idx: usize,
+}
+
+impl History {
+    pub fn new() -> History {
+        History {
+            history: vec![None; 20],
+            history_idx: 0,
+        }
+    }
+
+    pub fn push(&mut self, s: String) {
+        self.history[self.history_idx] = Some(s);
+        self.history_idx = (self.history_idx + 1) % 20;
+    }
+
+    pub fn iter<'a>(&'a self) -> HistoryIterator<'a> {
+        HistoryIterator::new(self)
+    }
+
+    pub fn get_idx(&self) -> usize {
+        if self.history_idx == 0 {
+            self.capacity() - 1
+        } else {
+            self.history_idx - 1
+        }
+    }
+
+    pub fn get(&self, i: usize) -> &Option<String> {
+        &self.history[i]
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.history.len()
+    }
+}
+
+struct HistoryIterator<'a> {
+    data: &'a History,
+    curr_idx: usize,
+    start_idx: usize,
+    done: bool,
+}
+
+impl HistoryIterator<'_> {
+    pub fn new<'a>(hist: &'a History) -> HistoryIterator<'a> {
+        HistoryIterator {
+            data: hist,
+            curr_idx: hist.get_idx(),
+            start_idx: hist.get_idx(),
+            done: false,
+        }
+    }
+}
+
+impl<'a> Iterator for HistoryIterator<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        if self.done { return None; }
+
+        let next_idx = if self.curr_idx == 0 {
+            self.data.capacity() - 1
+        } else {
+            self.curr_idx - 1
+        };
+
+        if next_idx == self.start_idx {
+            self.done = true;
+        }
+
+        if let Some(s) = self.data.get(self.curr_idx) {
+            self.curr_idx = next_idx;
+
+            return Some(&s);
+        }
+
+        None
+    }
+}
+
 struct ConnectionSet {
     connections: HashMap<SocketAddr, Connection>,
+    history: History,
 }
 
 impl ConnectionSet {
     pub fn new() -> ConnectionSet {
         ConnectionSet {
             connections: HashMap::<SocketAddr, Connection>::new(),
+            history: History::new(),
         }
+    }
+
+    pub fn history(&self) -> &History {
+        &self.history
     }
 
     pub fn update(&mut self, current_conns: &HashMap<i32, HttpConnection>) {
@@ -147,9 +243,12 @@ impl ConnectionSet {
         }
 
         for (addr, conn) in reindexed {
-            self.connections.entry(addr)
+            // `update()` returns true if there is a new request
+            if self.connections.entry(addr)
                 .or_insert(Connection::new(addr))
-                .update(conn);
+                .update(conn) {
+                self.history.push(format!("{}", conn.last_requested_uri.as_ref().unwrap()));
+            }
         }
     }
 }
@@ -230,25 +329,23 @@ fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
         100 * conn.bytes_sent/conn.bytes_requested
     };
     let speed = conn.estimated_speed();
-    let ip_str = match addr {
+    let mut ip_str = match addr {
         SocketAddr::V4(v4_addr) => {
-            format!("{host}:{port} {uri} => {sent}/{reqd}\r\n\t >> ({perc}% {speed} MiB/s)",
-                    host=v4_addr.ip(), port=v4_addr.port(),
-                    uri=conn.last_requested_uri,
-                    sent=conn.bytes_sent, reqd=conn.bytes_requested,
-                    perc=perc,
-                    speed=speed / (1024. * 1024.))
+            format!("{host}:{port}", host=v4_addr.ip(), port=v4_addr.port())
         }
         SocketAddr::V6(v6_addr) => {
-            format!("[{host}:{port}] {uri} => {sent}/{reqd}\r\n\t >> ({perc}% {speed} MiB/s)",
-                    host=v6_addr.ip(), port=v6_addr.port(),
-                    uri=conn.last_requested_uri,
-                    sent=conn.bytes_sent, reqd=conn.bytes_requested,
-                    perc=perc,
-                    speed=speed / (1024. * 1024.))
+            format!("[{host}:{port}]", host=v6_addr.ip(), port=v6_addr.port())
         }
     };
+    let info_str = format!(" {uri} #{num} => {sent}/{reqd}\t ({perc}% {speed} MiB/s)",
+            uri=conn.last_requested_uri,
+            num=conn.num_requests,
+            sent=conn.bytes_sent, reqd=conn.bytes_requested,
+            perc=perc,
+            speed=speed / (1024. * 1024.));
     
+    ip_str.push_str(&info_str);
+
     ip_str
 }
 
@@ -267,10 +364,15 @@ fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mp
             needs_update.store(true, Ordering::Relaxed);
 
             // Print that the connection has been established
-            let conn_set = &mut connection_set.lock().unwrap().connections;
+            let conn_set = &mut connection_set.lock().unwrap();
+            let conns = &mut conn_set.connections;
 
-            let messages: Vec<ListItem> = conn_set.iter_mut().map(|(addr, conn)| {
+            let messages_connections: Vec<ListItem> = conns.iter_mut().map(|(addr, conn)| {
                 ListItem::new(vec![Spans::from(Span::raw(build_str(addr, conn)))])
+            }).collect();
+
+            let messages_history: Vec<ListItem> = conn_set.history().iter().map(|s| {
+                ListItem::new(vec![Spans::from(Span::raw(s))])
             }).collect();
 
             terminal.draw(|f| {
@@ -279,8 +381,9 @@ fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mp
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Percentage(10),
-                            Constraint::Percentage(90)
+                            Constraint::Length(3),
+                            Constraint::Min(2),
+                            Constraint::Percentage(30),
                         ].as_ref()
                     )
                     .split(f.size());
@@ -290,8 +393,11 @@ fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mp
                             ).block(Block::default().borders(Borders::ALL).title("Information"));
                 f.render_widget(block, chunks[0]);
 
-                let block = List::new(messages).block(Block::default().borders(Borders::ALL).title("Connections"));
+                let block = List::new(messages_connections).block(Block::default().borders(Borders::ALL).title("Connections"));
                 f.render_widget(block, chunks[1]);
+
+                let block = List::new(messages_history).block(Block::default().borders(Borders::ALL).title("Request History"));
+                f.render_widget(block, chunks[2]);
             })?;
         }
 

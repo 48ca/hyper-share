@@ -171,6 +171,7 @@ pub struct HttpConnection {
     pub response: Option<HttpResponse>,
 
     pub last_requested_uri: Option<String>,
+    pub num_requests: usize,
 
     pub keep_alive: bool,
 
@@ -191,6 +192,7 @@ impl HttpConnection {
             bytes_requested: 0,
             bytes_sent: 0,
             last_requested_uri: None,
+            num_requests: 0,
         }
     }
 
@@ -366,11 +368,12 @@ impl HttpTui<'_> {
         let req: HttpRequest = match decode_request(body) {
             Ok(r) => r,
             Err(status) => {
-                return self.write_error_response(status, conn, None);
+                return self.write_error_response(status, conn, Some("Could not decode request."));
             }
         };
 
         conn.last_requested_uri = Some(req.path.to_string());
+        conn.num_requests += 1;
 
         // Check if keep-alive header was given in the request.
         // If it was not, assume keep-alive is >= HTTP/1.1.
@@ -380,7 +383,7 @@ impl HttpTui<'_> {
         };
 
         if req.method.is_none() {
-            return self.write_error_response(HttpStatus::NotImplemented, conn, None);
+            return self.write_error_response(HttpStatus::NotImplemented, conn, Some("This server does not implement the requested HTTP method."));
         }
 
         let normalized_path = if req.path.starts_with("/") {
@@ -395,7 +398,7 @@ impl HttpTui<'_> {
                 // Attempt to convert the system error into an HTTP error
                 // that we can send back to the user.
                 return match resolve_io_error(&error) {
-                    Some(http_error) => self.write_error_response(http_error, conn, None),
+                    Some(http_error) => self.write_error_response(http_error, conn, Some(&error.to_string())),
                     None => Err(error),
                 };
             }
@@ -405,13 +408,13 @@ impl HttpTui<'_> {
         if !canonical_path.starts_with(self.root_dir) {
             // Use 404 so that the user cannot determine if directories
             // exist or not.
-            return self.write_error_response(HttpStatus::NotFound, conn, None);
+            return self.write_error_response(HttpStatus::NotFound, conn, Some("Path disallowed."));
         }
 
         let metadata = match fs::metadata(&canonical_path) {
             Err(error) => {
                 return match resolve_io_error(&error) {
-                    Some(http_error) => self.write_error_response(http_error, conn, None),
+                    Some(http_error) => self.write_error_response(http_error, conn, Some(&error.to_string())),
                     None => Err(error),
                 };
             }
