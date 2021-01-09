@@ -131,14 +131,14 @@ struct History {
 impl History {
     pub fn new() -> History {
         History {
-            history: vec![None; 20],
+            history: vec![None; 50],
             history_idx: 0,
         }
     }
 
     pub fn push(&mut self, s: String) {
         self.history[self.history_idx] = Some(s);
-        self.history_idx = (self.history_idx + 1) % 20;
+        self.history_idx = (self.history_idx + 1) % 50;
     }
 
     pub fn iter<'a>(&'a self) -> HistoryIterator<'a> {
