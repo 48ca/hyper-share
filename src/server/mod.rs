@@ -265,31 +265,35 @@ impl HttpTui<'_> {
                         if fd == pipe_read {
                             break 'main;
                         }
-                        // If listener, get accept new connection and add it.
-                        if fd == l_raw_fd {
+                        let peer_fd = if fd == l_raw_fd {
+                            // If listener, get accept new connection and add it.
+                            // Then pass back the new peer fd to do an immediate read
                             match self.listener.accept() {
                                 Ok((stream, _addr)) => {
                                     let conn = HttpTui::create_http_connection(stream);
-                                    connections.insert(conn.stream.as_raw_fd(), conn);
+                                    let pfd = conn.stream.as_raw_fd();
+                                    connections.insert(pfd, conn);
+                                    pfd
                                 }
-                                _ => {},
-                                // Err(e) => write_error(e.to_string()),
+                                _ => { continue; },
                             }
                         } else {
-                            assert_eq!(connections[&fd].state, ConnectionState::ReadingRequest);
-                            // TODO: Error checking here
-                            let mut conn = connections.get_mut(&fd).unwrap();
-                            match self.handle_conn_sigpipe(&mut conn) {
-                                Ok(_) => {},
-                                Err(error) => {
-                                    let _ = self.write_error_response(HttpStatus::ServerError, conn, Some(&error.to_string()));
-                                    // write_error(format!("Server error while reading: {}", error));
-                                }
-                            };
-                            if connections[&fd].state == ConnectionState::Closing {
-                                // Delete to close connection
-                                connections.remove(&fd);
+                            // We have selected a peer fd, so just use that one
+                            fd
+                        };
+                        assert_eq!(connections[&peer_fd].state, ConnectionState::ReadingRequest);
+                        // TODO: Error checking here
+                        let mut conn = connections.get_mut(&peer_fd).unwrap();
+                        match self.handle_conn_sigpipe(&mut conn) {
+                            Ok(_) => {},
+                            Err(error) => {
+                                let _ = self.write_error_response(HttpStatus::ServerError, conn, Some(&error.to_string()));
+                                // write_error(format!("Server error while reading: {}", error));
                             }
+                        };
+                        if connections[&peer_fd].state == ConnectionState::Closing {
+                            // Delete to close connection
+                            connections.remove(&peer_fd);
                         }
                     }
                 }
@@ -336,7 +340,6 @@ impl HttpTui<'_> {
                     }
                 }
             }
-
             func(&connections);
         }
     }

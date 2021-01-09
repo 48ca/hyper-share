@@ -245,7 +245,6 @@ impl ConnectionSet {
         }
 
         for (addr, conn) in reindexed {
-            // `update()` returns true if there is a new request
             self.connections.entry(addr)
                 .or_insert(Connection::new(addr))
                 .update(conn);
