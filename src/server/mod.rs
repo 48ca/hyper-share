@@ -362,6 +362,9 @@ impl HttpTui<'_> {
 
         conn.bytes_read += bytes_read;
         if bytes_read == 0 || end_of_http_request(&buffer[..conn.bytes_read]) {
+            if conn.bytes_read == 0 {
+                return Ok(ConnectionState::Closing);
+            }
             // Once we have read the request, handle it.
             // The connection state will be updated accordingly
             let res = self.handle_request(conn);
@@ -392,6 +395,8 @@ impl HttpTui<'_> {
         let req: HttpRequest = match decode_request(body) {
             Ok(r) => r,
             Err(status) => {
+                // Kill the connection if we get invalid data
+                conn.keep_alive = false;
                 return self.write_error_response(status, conn, Some("Could not decode request."));
             }
         };
