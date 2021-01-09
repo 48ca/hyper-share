@@ -362,19 +362,21 @@ impl HttpTui<'_> {
             // Once we have read the request, handle it.
             // The connection state will be updated accordingly
             let res = self.handle_request(conn);
-            let ip_str = match conn.stream.peer_addr().unwrap() {
-                SocketAddr::V4(addr) => format!("{}:{}", addr.ip(), addr.port()),
-                SocketAddr::V6(addr) => format!("[{}]:{}", addr.ip(), addr.port()),
-            };
-            let code_str = match &conn.response {
-                Some(resp) => resp.get_code(),
-                None => "???".to_string(),
-            };
-            let path_str = match &conn.last_requested_uri {
-                Some(path) => path,
-                None => "[No path...]",
-            };
-            let _ = self.history_channel.send(format!("{} {} {}", ip_str, code_str, path_str));
+            if let Ok(peer_addr) = conn.stream.peer_addr() {
+                let ip_str = match peer_addr {
+                    SocketAddr::V4(addr) => format!("{}:{}", addr.ip(), addr.port()),
+                    SocketAddr::V6(addr) => format!("[{}]:{}", addr.ip(), addr.port()),
+                };
+                let code_str = match &conn.response {
+                    Some(resp) => resp.get_code(),
+                    None => "???".to_string(),
+                };
+                let path_str = match &conn.last_requested_uri {
+                    Some(path) => path,
+                    None => "[No path...]",
+                };
+                let _ = self.history_channel.send(format!("{} {} {}", ip_str, code_str, path_str));
+            }
             res
         } else {
             Ok(ConnectionState::ReadingRequest)
