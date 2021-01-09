@@ -1,3 +1,5 @@
+#[macro_use] extern crate lazy_static;
+
 use clap::Clap;
 
 use std::path::{Path, Display};

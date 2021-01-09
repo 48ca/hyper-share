@@ -1,3 +1,6 @@
+extern crate regex;
+use regex::{Regex,Captures};
+
 use std::io;
 use std::io::Write;
 use std::net::TcpStream;
@@ -74,14 +77,14 @@ pub struct HttpHeader {
 // Don't support multiple header values yet
 type HttpHeaderSet = Vec<HttpHeader>;
 
-pub struct HttpRequest<'a> {
-    pub path: &'a str,
+pub struct HttpRequest {
+    pub path: String,
     pub method: Option<HttpMethod>,
     pub version: HttpVersion,
     headers: HttpHeaderSet,
 }
 
-impl HttpRequest<'_> {
+impl HttpRequest {
     pub fn new(request_str: &str) -> Result<HttpRequest, HttpStatus> {
         /* GET /path/to/file HTTP/1.1
          * Header: value
@@ -127,7 +130,7 @@ impl HttpRequest<'_> {
         }
 
         Ok(HttpRequest {
-            path: path,
+            path: undo_percent_encoding(path),
             method: method,
             version: version,
             headers: headers
@@ -142,6 +145,32 @@ impl HttpRequest<'_> {
         }
         None
     }
+}
+
+fn get_byte_from_hex(tens_dig: u8, ones_dig: u8) -> u8 {
+    fn get_byte_from_hex_digit(dig: u8) -> u8 {
+        match dig as char {
+            '0'..='9' => dig - b'0',
+            'a'..='z' => dig - b'a',
+            'A'..='Z' => dig - b'A',
+            _ => panic!("get_byte_from_hex failed: {} = `{}`", dig, dig as char),
+        }
+    }
+
+    get_byte_from_hex_digit(tens_dig) << 4 +
+        get_byte_from_hex_digit(ones_dig)
+}
+
+fn undo_percent_encoding(path: &str) -> String {
+    lazy_static! {
+        static ref RE: Regex = Regex::new("%([0-9a-fA-F])([0-9a-fA-F])").unwrap();
+    }
+    let s = RE.replace_all(path, |caps: &Captures| {
+        let dig: u8 = get_byte_from_hex(caps[1].bytes().nth(0).unwrap(), caps[2].bytes().nth(0).unwrap());
+        let dig_arr: [u8; 1] = [dig];
+        String::from_utf8_lossy(&dig_arr[..]).to_string()
+    });
+    s.to_string()
 }
 
 pub struct HttpResponse {
