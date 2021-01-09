@@ -244,11 +244,9 @@ impl ConnectionSet {
 
         for (addr, conn) in reindexed {
             // `update()` returns true if there is a new request
-            if self.connections.entry(addr)
+            self.connections.entry(addr)
                 .or_insert(Connection::new(addr))
-                .update(conn) {
-                self.history.push(format!("{}", conn.last_requested_uri.as_ref().unwrap()));
-            }
+                .update(conn);
         }
     }
 }
@@ -267,7 +265,10 @@ fn main() -> Result<(), io::Error> {
             return Ok(())
         }
     };
-    let mut tui = match HttpTui::new(&opts.host, opts.port, &canon_path.as_path()) {
+
+    let (hist_tx, hist_rx) = mpsc::channel();
+
+    let mut tui = match HttpTui::new(&opts.host, opts.port, &canon_path.as_path(), hist_tx) {
         Ok(tui) => tui,
         Err(e) => {
             eprintln!("Failed to bind to port {}: {}", opts.port, e);
@@ -312,7 +313,15 @@ fn main() -> Result<(), io::Error> {
 
     tui.run(read_end, move |connections| {
         if connection_set_needs_update.swap(false, Ordering::Relaxed) {
-            connection_set.lock().unwrap().update(&connections);
+            let mut conn_set = connection_set.lock().unwrap();
+            conn_set.update(&connections);
+            loop {
+                match hist_rx.try_recv() {
+                    Ok(s) => { conn_set.history.push(s); }
+                    Err(mpsc::TryRecvError::Empty) => { break; }
+                    Err(mpsc::TryRecvError::Disconnected) => { break; }
+                }
+            }
         }
     });
 
@@ -383,7 +392,7 @@ fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mp
                         [
                             Constraint::Length(3),
                             Constraint::Min(2),
-                            Constraint::Percentage(30),
+                            Constraint::Percentage(50),
                         ].as_ref()
                     )
                     .split(f.size());

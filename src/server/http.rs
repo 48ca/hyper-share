@@ -177,6 +177,10 @@ impl HttpResponse {
         self.bytes_to_write = size;
     }
 
+    pub fn get_code(&self) -> String {
+        status_to_code(&self.status).to_string()
+    }
+
     #[allow(dead_code)]
     fn write_fully(buffer: &[u8], mut stream: &TcpStream) -> Result<(), io::Error> {
         let amt_to_write: usize = buffer.len();

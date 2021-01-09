@@ -3,6 +3,7 @@ mod http;
 
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::net::SocketAddr;
 
 use std::cmp::{max, min};
 
@@ -20,6 +21,8 @@ use std::collections::HashMap;
 use nix::sys::select::{select,FdSet};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::prelude::RawFd;
+
+use std::sync::mpsc;
 
 use std::path::Path;
 
@@ -205,14 +208,16 @@ impl HttpConnection {
 pub struct HttpTui<'a> {
     listener: TcpListener,
     root_dir: &'a Path,
+    history_channel: mpsc::Sender<String>,
 }
 
 impl HttpTui<'_> {
-    pub fn new<'a>(host: &str, port: u16, root_dir: &'a Path) -> Result<HttpTui<'a>, io::Error> {
+    pub fn new<'a>(host: &str, port: u16, root_dir: &'a Path, sender: mpsc::Sender<String>) -> Result<HttpTui<'a>, io::Error> {
         let listener = TcpListener::bind(format!("{mask}:{port}", mask=host, port=port))?;
         Ok(HttpTui {
             listener: listener,
             root_dir: root_dir,
+            history_channel: sender,
         })
     }
 
@@ -356,7 +361,21 @@ impl HttpTui<'_> {
         if bytes_read == 0 || end_of_http_request(&buffer[..conn.bytes_read]) {
             // Once we have read the request, handle it.
             // The connection state will be updated accordingly
-            self.handle_request(conn)
+            let res = self.handle_request(conn);
+            let ip_str = match conn.stream.peer_addr().unwrap() {
+                SocketAddr::V4(addr) => format!("{}:{}", addr.ip(), addr.port()),
+                SocketAddr::V6(addr) => format!("[{}]:{}", addr.ip(), addr.port()),
+            };
+            let code_str = match &conn.response {
+                Some(resp) => resp.get_code(),
+                None => "???".to_string(),
+            };
+            let path_str = match &conn.last_requested_uri {
+                Some(path) => path,
+                None => "[No path...]",
+            };
+            let _ = self.history_channel.send(format!("{} {} {}", ip_str, code_str, path_str));
+            res
         } else {
             Ok(ConnectionState::ReadingRequest)
         }
