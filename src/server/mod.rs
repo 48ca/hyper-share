@@ -336,8 +336,7 @@ impl HttpTui<'_> {
                         assert_eq!(connections[&fd].state, ConnectionState::WritingResponse);
                         match self.handle_conn_sigpipe(&mut connections.get_mut(&fd).unwrap()) {
                             Ok(_) => {}
-                            _ => {}
-                            // Err(error) => { write_error(format!("Server error while writing: {}", error)); }
+                            _ => {} // Err(error) => { write_error(format!("Server error while writing: {}", error)); }
                         }
                         if connections[&fd].state == ConnectionState::Closing {
                             // Delete to close connection

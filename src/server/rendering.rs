@@ -14,17 +14,24 @@ struct HtmlElement {
     text: Option<String>,
 }
 
+enum HtmlStyle {
+    CanHaveChildren, // <element ... > ... </element>
+    NoChildren,      // <element ... >
+}
+
 impl HtmlElement {
-    pub fn new(tag: &'static str, can_have_children: bool) -> HtmlElement {
+    pub fn new(tag: &'static str, can_have_children: HtmlStyle) -> HtmlElement {
         HtmlElement {
             tag: tag,
             attributes: Vec::new(),
             classes: Vec::new(),
-            can_have_children: can_have_children,
-            children: if can_have_children {
-                Some(Vec::new())
-            } else {
-                None
+            can_have_children: match can_have_children {
+                HtmlStyle::CanHaveChildren => true,
+                HtmlStyle::NoChildren => false,
+            },
+            children: match can_have_children {
+                HtmlStyle::CanHaveChildren => Some(Vec::new()),
+                HtmlStyle::NoChildren => None,
             },
             text: None,
         }
@@ -95,9 +102,9 @@ impl HtmlElement {
 }
 
 fn generate_default_footer() -> HtmlElement {
-    let mut footer = HtmlElement::new("footer", true);
-    let hr = HtmlElement::new("hr", false);
-    let mut pre = HtmlElement::new("pre", true);
+    let mut footer = HtmlElement::new("footer", HtmlStyle::CanHaveChildren);
+    let hr = HtmlElement::new("hr", HtmlStyle::NoChildren);
+    let mut pre = HtmlElement::new("pre", HtmlStyle::CanHaveChildren);
     pre.add_text(format!("Rendered with httptui revision {}.", GIT_HASH));
 
     footer.add_child(hr);
@@ -119,25 +126,36 @@ fn generate_href(relative_path: &str, fname: &str) -> String {
 }
 
 pub fn render_directory(relative_path: &str, path: &Path) -> String {
-    let mut html = HtmlElement::new("html", true);
-    let mut body = HtmlElement::new("body", true);
-    let mut h1 = HtmlElement::new("h1", true);
+    let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
+    let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
+    let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);
+    let mut h1 = HtmlElement::new("h1", HtmlStyle::CanHaveChildren);
+
+    // <link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon">
+    let mut link_favi = HtmlElement::new("link", HtmlStyle::NoChildren);
+    link_favi.add_attribute("rel".to_string(), "shortcut icon".to_string());
+    link_favi.add_attribute("href".to_string(), "data:image/x-icon;,".to_string());
+    link_favi.add_attribute("type".to_string(), "image/x-icon".to_string());
+
+    head.add_child(link_favi);
+    html.add_child(head);
+
     h1.add_text(format!("Directory listing for /{}", relative_path));
     body.add_child(h1);
-    body.add_child(HtmlElement::new("hr", false));
+    body.add_child(HtmlElement::new("hr", HtmlStyle::NoChildren));
     let top_level = relative_path.len() == 0;
     if !top_level {
-        let mut a = HtmlElement::new("a", true);
+        let mut a = HtmlElement::new("a", HtmlStyle::CanHaveChildren);
         let href = generate_href(relative_path, "..");
         a.add_attribute("href".to_string(), href);
-        let mut i = HtmlElement::new("i", true);
+        let mut i = HtmlElement::new("i", HtmlStyle::CanHaveChildren);
         i.add_text("Up a directory".to_string());
         a.add_child(i);
         body.add_child(a);
-        body.add_child(HtmlElement::new("br", false));
+        body.add_child(HtmlElement::new("br", HtmlStyle::NoChildren));
     }
     if let Ok(paths) = fs::read_dir(path) {
-        let mut table = HtmlElement::new("table", true);
+        let mut table = HtmlElement::new("table", HtmlStyle::CanHaveChildren);
         for path in paths {
             let entry = match path {
                 Ok(p) => p,
@@ -152,7 +170,7 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
                     continue;
                 }
             };
-            let mut tr = HtmlElement::new("tr", true);
+            let mut tr = HtmlElement::new("tr", HtmlStyle::CanHaveChildren);
 
             let meta = match entry.metadata() {
                 Ok(m) => m,
@@ -161,12 +179,12 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
                 }
             };
 
-            let mut td_type = HtmlElement::new("td", true);
-            let mut td_a = HtmlElement::new("td", true);
-            let mut td_size = HtmlElement::new("td", true);
+            let mut td_type = HtmlElement::new("td", HtmlStyle::CanHaveChildren);
+            let mut td_a = HtmlElement::new("td", HtmlStyle::CanHaveChildren);
+            let mut td_size = HtmlElement::new("td", HtmlStyle::CanHaveChildren);
 
             // Add pre
-            let mut pre_type = HtmlElement::new("pre", true);
+            let mut pre_type = HtmlElement::new("pre", HtmlStyle::CanHaveChildren);
             pre_type.add_text(if meta.is_dir() {
                 "[DIR]".to_string()
             } else {
@@ -180,13 +198,13 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
 
             // Add anchor
             let href = generate_href(relative_path, fname_str);
-            let mut a = HtmlElement::new("a", true);
+            let mut a = HtmlElement::new("a", HtmlStyle::CanHaveChildren);
             a.add_attribute("href".to_string(), href);
             a.add_text(fname_str.to_string());
             td_a.add_child(a);
 
             // Add size
-            let mut pre_size = HtmlElement::new("pre", true);
+            let mut pre_size = HtmlElement::new("pre", HtmlStyle::CanHaveChildren);
             if meta.is_file() {
                 pre_size.add_text(format!("{}", meta.len()));
             }
@@ -212,9 +230,17 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
 }
 
 pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
-    let mut html = HtmlElement::new("html", true);
-    let mut body = HtmlElement::new("body", true);
-    let mut h1 = HtmlElement::new("h1", true);
+    let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
+    let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
+    let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);
+    let mut h1 = HtmlElement::new("h1", HtmlStyle::CanHaveChildren);
+
+    // <link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon">
+    let mut link_favi = HtmlElement::new("link", HtmlStyle::NoChildren);
+    link_favi.add_attribute("rel".to_string(), "shortcut icon".to_string());
+    link_favi.add_attribute("href".to_string(), "data:image/x-icon;,".to_string());
+    link_favi.add_attribute("type".to_string(), "image/x-icon".to_string());
+    head.add_child(link_favi);
 
     h1.add_text(format!(
         "{} {}",
@@ -223,11 +249,11 @@ pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
     ));
     body.add_child(h1);
 
-    body.add_child(HtmlElement::new("hr", false));
+    body.add_child(HtmlElement::new("hr", HtmlStyle::NoChildren));
 
     match msg {
         Some(msg) => {
-            let mut p = HtmlElement::new("pre", true);
+            let mut p = HtmlElement::new("pre", HtmlStyle::CanHaveChildren);
             p.add_text(msg.to_string());
             p.add_class("error");
             body.add_child(p);
@@ -236,6 +262,7 @@ pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
     }
 
     body.add_child(generate_default_footer());
+    html.add_child(head);
     html.add_child(body);
     html.render()
 }
