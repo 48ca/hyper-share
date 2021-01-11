@@ -1,25 +1,26 @@
-#[macro_use] extern crate lazy_static;
+#[macro_use]
+extern crate lazy_static;
 
 use clap::Clap;
 
-use std::path::{Path, Display};
 use std::fs::canonicalize;
+use std::path::{Display, Path};
 
 use std::io;
-use termion::raw::IntoRawMode;
-use tui::Terminal;
-use tui::backend::TermionBackend;
-use tui::widgets::{Block, Borders, List, ListItem};
-use tui::layout::{Layout, Constraint, Direction};
-use tui::text::{Span, Spans};
-use termion::input::TermRead;
 use termion::event::Key;
+use termion::input::TermRead;
+use termion::raw::IntoRawMode;
 use termion::screen::AlternateScreen;
+use tui::backend::TermionBackend;
+use tui::layout::{Constraint, Direction, Layout};
+use tui::text::{Span, Spans};
+use tui::widgets::{Block, Borders, List, ListItem};
+use tui::Terminal;
 
 use std::collections::HashMap;
 
-use std::sync::{Arc,Mutex};
-use std::sync::atomic::{AtomicBool,Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use std::sync::mpsc;
 
@@ -34,7 +35,7 @@ use std::net::SocketAddr;
 use nix::unistd;
 
 #[derive(Clap)]
-#[clap(version="1.0", author="James Houghton <jhoughton@virginia.edu>")]
+#[clap(version = "1.0", author = "James Houghton <jhoughton@virginia.edu>")]
 struct Opts {
     #[clap(short, long, default_value = ".")]
     directory: String,
@@ -54,16 +55,16 @@ impl ConnectionSpeedMeasurement {
         return ConnectionSpeedMeasurement {
             speeds: [0., 0., 0.],
             ind: 0,
-        }
+        };
     }
 
     pub fn update(&mut self, speed: f32) {
         self.speeds[self.ind] = speed;
-        self.ind = (self.ind+1) % 3;
+        self.ind = (self.ind + 1) % 3;
     }
 
     pub fn get_avg(&self) -> f32 {
-        return (self.speeds[0] + self.speeds[1] + self.speeds[2])/3.;
+        return (self.speeds[0] + self.speeds[1] + self.speeds[2]) / 3.;
     }
 }
 
@@ -112,8 +113,10 @@ impl Connection {
         self.update_time = time::Instant::now();
         let dur = self.update_time.duration_since(self.prev_update_time);
 
-        let millis: u64 = 1000 * dur.as_secs() + (dur.subsec_nanos() as u64)/1000000;
-        if millis == 0 { return 0.; }
+        let millis: u64 = 1000 * dur.as_secs() + (dur.subsec_nanos() as u64) / 1000000;
+        if millis == 0 {
+            return 0.;
+        }
         let speed = (self.bytes_sent - self.prev_bytes_sent) as f32 / (millis as f32) * 1000.0;
         self.avg_speed.update(speed);
 
@@ -184,7 +187,9 @@ impl<'a> Iterator for HistoryIterator<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<&'a str> {
-        if self.done { return None; }
+        if self.done {
+            return None;
+        }
 
         let next_idx = if self.curr_idx == 0 {
             self.data.capacity() - 1
@@ -228,7 +233,9 @@ impl ConnectionSet {
         for (_, conn) in current_conns {
             let peer_addr = match conn.stream.peer_addr() {
                 Ok(addr) => addr,
-                Err(_) => { continue; }
+                Err(_) => {
+                    continue;
+                }
             };
             reindexed.insert(peer_addr, &conn);
         }
@@ -245,7 +252,8 @@ impl ConnectionSet {
         }
 
         for (addr, conn) in reindexed {
-            self.connections.entry(addr)
+            self.connections
+                .entry(addr)
                 .or_insert(Connection::new(addr))
                 .update(conn);
         }
@@ -263,7 +271,7 @@ fn main() -> Result<(), io::Error> {
         Ok(path) => path,
         Err(e) => {
             eprintln!("Failed to open directory {}: {}", opts.directory, e);
-            return Ok(())
+            return Ok(());
         }
     };
 
@@ -295,7 +303,12 @@ fn main() -> Result<(), io::Error> {
     let connection_set_ptr = connection_set.clone();
     let canon_path = canon_path.clone();
     let thd = thread::spawn(move || {
-        let _ = display(canon_path.display(), connection_set_ptr, rx, &needs_update_clone);
+        let _ = display(
+            canon_path.display(),
+            connection_set_ptr,
+            rx,
+            &needs_update_clone,
+        );
         let _ = unistd::write(write_end, "\0".as_bytes());
         let _ = unistd::close(write_end);
     });
@@ -305,7 +318,10 @@ fn main() -> Result<(), io::Error> {
         for evt in stdin.keys() {
             if let Ok(key) = evt {
                 match key {
-                    Key::Char('q') => { let _ = tx.send(ControlEvent::Quit); break; },
+                    Key::Char('q') => {
+                        let _ = tx.send(ControlEvent::Quit);
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -318,9 +334,15 @@ fn main() -> Result<(), io::Error> {
             conn_set.update(&connections);
             loop {
                 match hist_rx.try_recv() {
-                    Ok(s) => { conn_set.history.push(s); }
-                    Err(mpsc::TryRecvError::Empty) => { break; }
-                    Err(mpsc::TryRecvError::Disconnected) => { break; }
+                    Ok(s) => {
+                        conn_set.history.push(s);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        break;
+                    }
                 }
             }
         }
@@ -335,32 +357,45 @@ fn main() -> Result<(), io::Error> {
 }
 
 fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
-    let perc = if conn.bytes_requested == 0 { 0 } else {
-        100 * conn.bytes_sent/conn.bytes_requested
+    let perc = if conn.bytes_requested == 0 {
+        0
+    } else {
+        100 * conn.bytes_sent / conn.bytes_requested
     };
     let speed = conn.estimated_speed();
     let mut ip_str = match addr {
         SocketAddr::V4(v4_addr) => {
-            format!("{host}:{port}", host=v4_addr.ip(), port=v4_addr.port())
+            format!("{host}:{port}", host = v4_addr.ip(), port = v4_addr.port())
         }
         SocketAddr::V6(v6_addr) => {
-            format!("[{host}:{port}]", host=v6_addr.ip(), port=v6_addr.port())
+            format!(
+                "[{host}:{port}]",
+                host = v6_addr.ip(),
+                port = v6_addr.port()
+            )
         }
     };
-    let info_str = format!(" {uri} #{num} => {sent}/{reqd}\t ({perc}% {speed} MiB/s)",
-            uri=conn.last_requested_uri,
-            num=conn.num_requests,
-            sent=conn.bytes_sent, reqd=conn.bytes_requested,
-            perc=perc,
-            speed=speed / (1024. * 1024.));
-    
+    let info_str = format!(
+        " {uri} #{num} => {sent}/{reqd}\t ({perc}% {speed} MiB/s)",
+        uri = conn.last_requested_uri,
+        num = conn.num_requests,
+        sent = conn.bytes_sent,
+        reqd = conn.bytes_requested,
+        perc = perc,
+        speed = speed / (1024. * 1024.)
+    );
+
     ip_str.push_str(&info_str);
 
     ip_str
 }
 
-fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mpsc::Receiver<ControlEvent>, needs_update: &AtomicBool) -> Result<(), io::Error> {
-
+fn display(
+    root_path: Display,
+    connection_set: Arc<Mutex<ConnectionSet>>,
+    rx: mpsc::Receiver<ControlEvent>,
+    needs_update: &AtomicBool,
+) -> Result<(), io::Error> {
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);
     let backend = TermionBackend::new(stdout);
@@ -370,20 +405,24 @@ fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mp
         // if needs_update was false, it has been updated
         // if !needs_update.swap(true, Ordering::Relaxed) {
         if true {
-
             needs_update.store(true, Ordering::Relaxed);
 
             // Print that the connection has been established
             let conn_set = &mut connection_set.lock().unwrap();
             let conns = &mut conn_set.connections;
 
-            let messages_connections: Vec<ListItem> = conns.iter_mut().map(|(addr, conn)| {
-                ListItem::new(vec![Spans::from(Span::raw(build_str(addr, conn)))])
-            }).collect();
+            let messages_connections: Vec<ListItem> = conns
+                .iter_mut()
+                .map(|(addr, conn)| {
+                    ListItem::new(vec![Spans::from(Span::raw(build_str(addr, conn)))])
+                })
+                .collect();
 
-            let messages_history: Vec<ListItem> = conn_set.history().iter().map(|s| {
-                ListItem::new(vec![Spans::from(Span::raw(s))])
-            }).collect();
+            let messages_history: Vec<ListItem> = conn_set
+                .history()
+                .iter()
+                .map(|s| ListItem::new(vec![Spans::from(Span::raw(s))]))
+                .collect();
 
             terminal.draw(|f| {
                 let chunks = Layout::default()
@@ -394,28 +433,42 @@ fn display(root_path: Display, connection_set: Arc<Mutex<ConnectionSet>>, rx: mp
                             Constraint::Length(3),
                             Constraint::Min(2),
                             Constraint::Percentage(50),
-                        ].as_ref()
+                        ]
+                        .as_ref(),
                     )
                     .split(f.size());
 
-                let block = List::new(
-                                vec![ListItem::new(vec![Spans::from(Span::raw(format!("Serving {}", root_path)))])]
-                            ).block(Block::default().borders(Borders::ALL).title("Information"));
+                let block = List::new(vec![ListItem::new(vec![Spans::from(Span::raw(format!(
+                    "Serving {}",
+                    root_path
+                )))])])
+                .block(Block::default().borders(Borders::ALL).title("Information"));
                 f.render_widget(block, chunks[0]);
 
-                let block = List::new(messages_connections).block(Block::default().borders(Borders::ALL).title("Connections"));
+                let block = List::new(messages_connections)
+                    .block(Block::default().borders(Borders::ALL).title("Connections"));
                 f.render_widget(block, chunks[1]);
 
-                let block = List::new(messages_history).block(Block::default().borders(Borders::ALL).title("Request History"));
+                let block = List::new(messages_history).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Request History"),
+                );
                 f.render_widget(block, chunks[2]);
             })?;
         }
 
         loop {
             match rx.try_recv() {
-                Ok(ControlEvent::Quit) => { break 'outer; },
-                Err(mpsc::TryRecvError::Empty) => { break; }
-                Err(mpsc::TryRecvError::Disconnected) => { break 'outer; }
+                Ok(ControlEvent::Quit) => {
+                    break 'outer;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    break;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    break 'outer;
+                }
             }
         }
 

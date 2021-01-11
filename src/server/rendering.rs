@@ -1,5 +1,5 @@
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
 use crate::server::http;
 
@@ -21,7 +21,11 @@ impl HtmlElement {
             attributes: Vec::new(),
             classes: Vec::new(),
             can_have_children: can_have_children,
-            children: if can_have_children { Some(Vec::new()) } else { None },
+            children: if can_have_children {
+                Some(Vec::new())
+            } else {
+                None
+            },
             text: None,
         }
     }
@@ -34,8 +38,8 @@ impl HtmlElement {
         match &mut self.children {
             Some(children) => {
                 children.push(child);
-            },
-            _ => {},
+            }
+            _ => {}
         };
     }
 
@@ -70,7 +74,9 @@ impl HtmlElement {
         let mut open_tag = format!("<{} {} {}>", self.tag, attributes, classes);
         if self.can_have_children {
             match &self.text {
-                Some(text) => { open_tag.push_str(&text); },
+                Some(text) => {
+                    open_tag.push_str(&text);
+                }
                 None => {}
             };
             match &self.children {
@@ -78,8 +84,8 @@ impl HtmlElement {
                     for child in children {
                         open_tag.push_str(&child.render());
                     }
-                },
-                None => {},
+                }
+                None => {}
             }
             let close_tag = format!("</{}>", self.tag);
             open_tag.push_str(&close_tag);
@@ -103,7 +109,12 @@ fn generate_href(relative_path: &str, fname: &str) -> String {
     if relative_path.ends_with("/") {
         format!("/{}{}", relative_path, fname)
     } else {
-        format!("/{}{}{}", relative_path, if relative_path.len() > 0 { "/" } else { "" }, fname)
+        format!(
+            "/{}{}{}",
+            relative_path,
+            if relative_path.len() > 0 { "/" } else { "" },
+            fname
+        )
     }
 }
 
@@ -130,18 +141,24 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
         for path in paths {
             let entry = match path {
                 Ok(p) => p,
-                _ => { continue; }
+                _ => {
+                    continue;
+                }
             };
             let fname = entry.file_name();
             let fname_str = match fname.to_str() {
                 Some(f) => f,
-                _ => { continue; }
+                _ => {
+                    continue;
+                }
             };
             let mut tr = HtmlElement::new("tr", true);
 
             let meta = match entry.metadata() {
                 Ok(m) => m,
-                _ => { continue; }
+                _ => {
+                    continue;
+                }
             };
 
             let mut td_type = HtmlElement::new("td", true);
@@ -155,7 +172,10 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
             } else {
                 "[FILE]".to_string()
             });
-            pre_type.add_attribute("style".to_string(), "display: block; text-align: center;".to_string());
+            pre_type.add_attribute(
+                "style".to_string(),
+                "display: block; text-align: center;".to_string(),
+            );
             td_type.add_child(pre_type);
 
             // Add anchor
@@ -170,7 +190,10 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
             if meta.is_file() {
                 pre_size.add_text(format!("{}", meta.len()));
             }
-            pre_size.add_attribute("style".to_string(), "display: block; text-align: right;".to_string());
+            pre_size.add_attribute(
+                "style".to_string(),
+                "display: block; text-align: right;".to_string(),
+            );
             td_size.add_child(pre_size);
 
             tr.add_child(td_type);
@@ -193,7 +216,11 @@ pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
     let mut body = HtmlElement::new("body", true);
     let mut h1 = HtmlElement::new("h1", true);
 
-    h1.add_text(format!("{} {}", http::status_to_code(status), http::status_to_message(status)));
+    h1.add_text(format!(
+        "{} {}",
+        http::status_to_code(status),
+        http::status_to_message(status)
+    ));
     body.add_child(h1);
 
     body.add_child(HtmlElement::new("hr", false));
@@ -205,7 +232,7 @@ pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
             p.add_class("error");
             body.add_child(p);
         }
-        None => {},
+        None => {}
     }
 
     body.add_child(generate_default_footer());
