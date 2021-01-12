@@ -63,25 +63,25 @@ impl HtmlElement {
 
     pub fn render(&self) -> String {
         let attributes = if self.attributes.len() > 0 {
-            let mut s = format!(" ");
+            let mut s = format!("");
             for (attr, val) in &self.attributes {
-                s.push_str(&format!("{}='{}'", attr, val));
+                s.push_str(&format!(" {}='{}'", attr, val));
             }
             s
         } else {
             format!("")
         };
         let classes = if self.classes.len() > 0 {
-            let mut s = format!("class='");
+            let mut s = format!(" class='");
             for class in &self.classes {
-                s.push_str(class);
+                s.push_str(&format!(" {}", class));
             }
             s.push_str("'");
             s
         } else {
             format!("")
         };
-        let mut open_tag = format!("<{} {} {}>", self.tag, attributes, classes);
+        let mut open_tag = format!("<{}{}{}>", self.tag, attributes, classes);
         if self.can_have_children {
             match &self.text {
                 Some(text) => {
