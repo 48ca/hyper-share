@@ -177,6 +177,7 @@ pub struct HttpConnection {
     pub response_data: ResponseDataType,
     pub response: Option<HttpResponse>,
 
+    pub last_requested_method: Option<HttpMethod>,
     pub last_requested_uri: Option<String>,
     pub num_requests: usize,
 
@@ -199,6 +200,7 @@ impl HttpConnection {
             bytes_requested: 0,
             bytes_sent: 0,
             last_requested_uri: None,
+            last_requested_method: None,
             num_requests: 0,
         };
     }
@@ -418,9 +420,16 @@ impl HttpTui<'_> {
                     Some(path) => path,
                     None => "[No path...]",
                 };
-                let _ = self
-                    .history_channel
-                    .send(format!("{} {} {}", ip_str, code_str, path_str));
+                let method_str = match &conn.last_requested_method {
+                    Some(HttpMethod::GET) => " GET",
+                    Some(HttpMethod::HEAD) => "HEAD",
+                    Some(HttpMethod::POST) => "POST",
+                    None => " ???",
+                };
+                let _ = self.history_channel.send(format!(
+                    "{} {} {} {}",
+                    ip_str, code_str, method_str, path_str
+                ));
             }
             res
         } else {
@@ -441,6 +450,7 @@ impl HttpTui<'_> {
         };
 
         conn.last_requested_uri = Some(req.path.to_string());
+        conn.last_requested_method = req.method.clone();
         conn.num_requests += 1;
 
         // Check if keep-alive header was given in the request.
@@ -603,11 +613,11 @@ impl HttpTui<'_> {
         conn.response = Some(resp);
 
         conn.response_data = match req.method.unwrap() {
-            HttpMethod::GET => {
+            HttpMethod::HEAD => ResponseDataType::None,
+            _ => {
                 conn.bytes_requested += range;
                 response_data
             }
-            HttpMethod::HEAD => ResponseDataType::None,
         };
 
         // Force an initial write of the data

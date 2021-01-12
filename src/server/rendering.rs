@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::Path;
 
+use std::collections::HashMap;
+use std::io::Read;
+
 use crate::server::http;
 
 const GIT_HASH: &'static str = env!("GIT_HASH");
@@ -125,44 +128,47 @@ fn generate_href(relative_path: &str, fname: &str) -> String {
     }
 }
 
-pub fn render_directory(relative_path: &str, path: &Path) -> String {
-    let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
-    let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
-    let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);
-    let mut h1 = HtmlElement::new("h1", HtmlStyle::CanHaveChildren);
-
-    // <link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon">
-    let mut link_favi = HtmlElement::new("link", HtmlStyle::NoChildren);
-    link_favi.add_attribute("rel".to_string(), "shortcut icon".to_string());
-    link_favi.add_attribute("href".to_string(), "data:image/x-icon;,".to_string());
-    link_favi.add_attribute("type".to_string(), "image/x-icon".to_string());
-
-    head.add_child(link_favi);
-    html.add_child(head);
-
-    h1.add_text(format!("Directory listing for /{}", relative_path));
-    body.add_child(h1);
-    body.add_child(HtmlElement::new("hr", HtmlStyle::NoChildren));
-    let top_level = relative_path.len() == 0;
-    if !top_level {
-        let mut a = HtmlElement::new("a", HtmlStyle::CanHaveChildren);
-        let href = generate_href(relative_path, "..");
-        a.add_attribute("href".to_string(), href);
-        let mut i = HtmlElement::new("i", HtmlStyle::CanHaveChildren);
-        i.add_text("Up a directory".to_string());
-        a.add_child(i);
-        body.add_child(a);
-        body.add_child(HtmlElement::new("br", HtmlStyle::NoChildren));
+fn generate_md5_table(paths: &Vec<std::fs::DirEntry>) -> HashMap<String, String> {
+    let mut res = HashMap::<String, String>::new();
+    for entry in paths {
+        let metadata = match entry.metadata() {
+            Ok(meta) => meta,
+            _ => {
+                continue;
+            }
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let is_sum = match entry.path().extension() {
+            Some(ext) => ext.to_string_lossy() == "md5sum",
+            None => false,
+        };
+        if !is_sum {
+            continue;
+        }
+        if metadata.len() > 34 {
+            continue;
+        }
+        if let Ok(mut file) = fs::File::open(entry.path()) {
+            let mut contents = String::with_capacity(metadata.len() as usize);
+            if file.read_to_string(&mut contents).is_ok() {
+                if let Some(s) = entry.path().file_name().unwrap().to_str() {
+                    res.insert(s.to_string(), contents);
+                }
+            }
+        }
     }
+    res
+}
+
+fn generate_dir_table(path: &Path, relative_path: &str) -> HtmlElement {
     if let Ok(paths) = fs::read_dir(path) {
         let mut table = HtmlElement::new("table", HtmlStyle::CanHaveChildren);
-        for path in paths {
-            let entry = match path {
-                Ok(p) => p,
-                _ => {
-                    continue;
-                }
-            };
+        let mut paths_vec: Vec<_> = paths.filter_map(Option::Some).map(|r| r.unwrap()).collect();
+        paths_vec.sort_by_key(|p| p.path());
+        let md5_table = generate_md5_table(&paths_vec);
+        for entry in paths_vec {
             let fname = entry.file_name();
             let fname_str = match fname.to_str() {
                 Some(f) => f,
@@ -170,6 +176,11 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
                     continue;
                 }
             };
+
+            if md5_table.contains_key(fname_str) {
+                continue;
+            }
+
             let mut tr = HtmlElement::new("tr", HtmlStyle::CanHaveChildren);
 
             let meta = match entry.metadata() {
@@ -182,6 +193,7 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
             let mut td_type = HtmlElement::new("td", HtmlStyle::CanHaveChildren);
             let mut td_a = HtmlElement::new("td", HtmlStyle::CanHaveChildren);
             let mut td_size = HtmlElement::new("td", HtmlStyle::CanHaveChildren);
+            let mut td_hash = HtmlElement::new("td", HtmlStyle::CanHaveChildren);
 
             // Add pre
             let mut pre_type = HtmlElement::new("pre", HtmlStyle::CanHaveChildren);
@@ -214,19 +226,71 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
             );
             td_size.add_child(pre_size);
 
+            match md5_table.get(&format!("{}.md5sum", fname_str)) {
+                Some(data) => {
+                    let mut pre = HtmlElement::new("pre", HtmlStyle::CanHaveChildren);
+                    pre.add_text(format!("MD5: {}", data));
+                    td_hash.add_child(pre);
+                }
+                _ => {}
+            }
             tr.add_child(td_type);
             tr.add_child(td_a);
             tr.add_child(td_size);
+            tr.add_child(td_hash);
 
             table.add_child(tr);
         }
-        body.add_child(table);
-        body.add_child(generate_default_footer());
-        html.add_child(body);
-        html.render()
+        table
     } else {
-        "Error reading directory".to_string()
+        let mut p = HtmlElement::new("p", HtmlStyle::CanHaveChildren);
+        p.add_text("Error reading directory".to_string());
+        p
     }
+}
+
+pub fn render_directory(relative_path: &str, path: &Path) -> String {
+    let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
+    let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
+    let mut style = HtmlElement::new("style", HtmlStyle::CanHaveChildren);
+    style.add_text(
+        r#"
+    tr { font-family: monospace; }
+    "#
+        .to_string(),
+    );
+    head.add_child(style);
+    let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);
+    let mut h1 = HtmlElement::new("h1", HtmlStyle::CanHaveChildren);
+
+    // <link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon">
+    let mut link_favi = HtmlElement::new("link", HtmlStyle::NoChildren);
+    link_favi.add_attribute("rel".to_string(), "shortcut icon".to_string());
+    link_favi.add_attribute("href".to_string(), "data:image/x-icon;,".to_string());
+    link_favi.add_attribute("type".to_string(), "image/x-icon".to_string());
+
+    head.add_child(link_favi);
+    html.add_child(head);
+
+    h1.add_text(format!("Directory listing for /{}", relative_path));
+    body.add_child(h1);
+    body.add_child(HtmlElement::new("hr", HtmlStyle::NoChildren));
+    let top_level = relative_path.len() == 0;
+    if !top_level {
+        let mut a = HtmlElement::new("a", HtmlStyle::CanHaveChildren);
+        let href = generate_href(relative_path, "..");
+        a.add_attribute("href".to_string(), href);
+        let mut i = HtmlElement::new("i", HtmlStyle::CanHaveChildren);
+        i.add_text("Up a directory".to_string());
+        a.add_child(i);
+        body.add_child(a);
+        body.add_child(HtmlElement::new("br", HtmlStyle::NoChildren));
+    }
+    let table = generate_dir_table(path, relative_path);
+    body.add_child(table);
+    body.add_child(generate_default_footer());
+    html.add_child(body);
+    html.render()
 }
 
 pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {

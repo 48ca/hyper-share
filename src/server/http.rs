@@ -8,10 +8,11 @@ use std::io::Write;
 use std::mem;
 use std::net::TcpStream;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum HttpMethod {
     GET,
     HEAD,
+    POST,
 }
 
 #[derive(PartialEq, Clone)]
@@ -118,6 +119,8 @@ impl HttpRequest {
             Some(HttpMethod::GET)
         } else if verb == "HEAD" {
             Some(HttpMethod::HEAD)
+        } else if verb == "POST" {
+            Some(HttpMethod::POST)
         } else {
             None
         };
