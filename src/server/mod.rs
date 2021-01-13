@@ -614,21 +614,16 @@ impl HttpTui<'_> {
                     Some("This server does not implement the requested HTTP method.".to_string()),
                 );
             }
-            Some(HttpMethod::GET) => self.handle_get(&req),
-            Some(HttpMethod::HEAD) => self.handle_get(&req),
-            Some(HttpMethod::POST) => self.handle_post(&req),
+            Some(HttpMethod::GET) => self.handle_get(&req)?,
+            Some(HttpMethod::HEAD) => self.handle_get(&req)?,
+            Some(HttpMethod::POST) => self.handle_post(&req)?,
         };
 
         let (mut resp, response_data, range) = match result {
-            Ok(http_result) => match http_result {
-                HttpResult::Error(http_status, msg) => {
-                    return self.write_error_response(http_status, conn, msg);
-                }
-                HttpResult::Response(resp, response_data, range) => (resp, response_data, range),
-            },
-            Err(e) => {
-                return Err(e);
+            HttpResult::Error(http_status, msg) => {
+                return self.write_error_response(http_status, conn, msg);
             }
+            HttpResult::Response(resp, response_data, range) => (resp, response_data, range),
         };
 
         resp.add_header(
