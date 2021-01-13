@@ -288,12 +288,22 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
     }
     let table = generate_dir_table(path, relative_path);
     body.add_child(table);
+
+    let mut upload_form = HtmlElement::new("form", HtmlStyle::CanHaveChildren);
+    upload_form.add_attribute("method".to_string(), "post".to_string());
+    upload_form.add_attribute("enctype".to_string(), "text/plain".to_string());
+    let mut input = HtmlElement::new("input", HtmlStyle::NoChildren);
+    input.add_attribute("type".to_string(), "file".to_string());
+    input.add_attribute("name".to_string(), "data".to_string());
+    upload_form.add_child(input);
+    body.add_child(upload_form);
+
     body.add_child(generate_default_footer());
     html.add_child(body);
     html.render()
 }
 
-pub fn render_error(status: &http::HttpStatus, msg: Option<&str>) -> String {
+pub fn render_error(status: &http::HttpStatus, msg: Option<String>) -> String {
     let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
     let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
     let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);

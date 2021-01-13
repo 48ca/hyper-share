@@ -211,6 +211,11 @@ impl HttpConnection {
     }
 }
 
+enum HttpResult {
+    Response(HttpResponse, ResponseDataType, usize),
+    Error(HttpStatus, Option<String>),
+}
+
 pub struct HttpTui<'a> {
     listener: TcpListener,
     root_dir: &'a Path,
@@ -315,7 +320,7 @@ impl HttpTui<'_> {
                                 let _ = self.write_error_response(
                                     HttpStatus::ServerError,
                                     conn,
-                                    Some(&error.to_string()),
+                                    Some(error.to_string()),
                                 );
                                 // write_error(format!("Server error while reading: {}", error));
                             }
@@ -368,7 +373,7 @@ impl HttpTui<'_> {
                             let _ = self.write_error_response(
                                 HttpStatus::ServerError,
                                 connections.get_mut(&fd).unwrap(),
-                                Some("Peer socket in error state"),
+                                Some("Peer socket in error state".to_string()),
                             );
                             println!("Got bad state on client socket");
                             connections.remove(&fd);
@@ -437,37 +442,12 @@ impl HttpTui<'_> {
         }
     }
 
-    fn handle_request(&self, mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
-        let body = &mut conn.buffer[..conn.bytes_read];
+    fn handle_post(&self, req: &HttpRequest) -> Result<HttpResult, io::Error> {
+        let resp = HttpResponse::new(HttpStatus::OK, &req.version);
+        Ok(HttpResult::Response(resp, ResponseDataType::None, 0))
+    }
 
-        let req: HttpRequest = match decode_request(body) {
-            Ok(r) => r,
-            Err(status) => {
-                // Kill the connection if we get invalid data
-                conn.keep_alive = false;
-                return self.write_error_response(status, conn, Some("Could not decode request."));
-            }
-        };
-
-        conn.last_requested_uri = Some(req.path.to_string());
-        conn.last_requested_method = req.method.clone();
-        conn.num_requests += 1;
-
-        // Check if keep-alive header was given in the request.
-        // If it was not, assume keep-alive is >= HTTP/1.1.
-        conn.keep_alive = match req.get_header("connection") {
-            Some(value) => value.to_lowercase() == "keep-alive",
-            None => false,
-        };
-
-        if req.method.is_none() {
-            return self.write_error_response(
-                HttpStatus::NotImplemented,
-                conn,
-                Some("This server does not implement the requested HTTP method."),
-            );
-        }
-
+    fn handle_get(&self, req: &HttpRequest) -> Result<HttpResult, io::Error> {
         let normalized_path = if req.path.starts_with("/") {
             &req.path[1..]
         } else {
@@ -480,9 +460,7 @@ impl HttpTui<'_> {
                 // Attempt to convert the system error into an HTTP error
                 // that we can send back to the user.
                 return match resolve_io_error(&error) {
-                    Some(http_error) => {
-                        self.write_error_response(http_error, conn, Some(&error.to_string()))
-                    }
+                    Some(http_error) => Ok(HttpResult::Error(http_error, Some(error.to_string()))),
                     None => Err(error),
                 };
             }
@@ -492,15 +470,16 @@ impl HttpTui<'_> {
         if !canonical_path.starts_with(self.root_dir) {
             // Use 404 so that the user cannot determine if directories
             // exist or not.
-            return self.write_error_response(HttpStatus::NotFound, conn, Some("Path disallowed."));
+            return Ok(HttpResult::Error(
+                HttpStatus::NotFound,
+                Some("Path disallowed.".to_string()),
+            ));
         }
 
         let metadata = match fs::metadata(&canonical_path) {
             Err(error) => {
                 return match resolve_io_error(&error) {
-                    Some(http_error) => {
-                        self.write_error_response(http_error, conn, Some(&error.to_string()))
-                    }
+                    Some(http_error) => Ok(HttpResult::Error(http_error, Some(error.to_string()))),
                     None => Err(error),
                 };
             }
@@ -508,11 +487,10 @@ impl HttpTui<'_> {
         };
 
         if !metadata.is_file() && !metadata.is_dir() {
-            return self.write_error_response(
+            return Ok(HttpResult::Error(
                 HttpStatus::PermissionDenied,
-                conn,
-                Some(&format!("Attempted to read an irregular file.")),
-            );
+                Some(format!("Attempted to read an irregular file.")),
+            ));
         }
 
         let (mut response_data, full_length, mime) = if metadata.is_dir() {
@@ -549,11 +527,10 @@ impl HttpTui<'_> {
                     };
                     (real_start, real_len, true)
                 } else {
-                    return self.write_error_response(
+                    return Ok(HttpResult::Error(
                         HttpStatus::BadRequest,
-                        conn,
-                        Some(&format!("Could not decode Range header")),
-                    );
+                        Some(format!("Could not decode Range header")),
+                    ));
                 }
             }
             None => (0, full_length, false),
@@ -594,6 +571,66 @@ impl HttpTui<'_> {
             }
         }
 
+        if let Some(content_type) = mime {
+            // If we want to add a content type, add it
+            resp.add_header("Content-Type".to_string(), content_type.to_string());
+        }
+
+        Ok(HttpResult::Response(resp, response_data, range))
+    }
+
+    fn handle_request(&self, mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
+        let body = &mut conn.buffer[..conn.bytes_read];
+
+        let req: HttpRequest = match decode_request(body) {
+            Ok(r) => r,
+            Err(status) => {
+                // Kill the connection if we get invalid data
+                conn.keep_alive = false;
+                return self.write_error_response(
+                    status,
+                    conn,
+                    Some("Could not decode request.".to_string()),
+                );
+            }
+        };
+
+        conn.last_requested_uri = Some(req.path.to_string());
+        conn.last_requested_method = req.method.clone();
+        conn.num_requests += 1;
+
+        // Check if keep-alive header was given in the request.
+        // If it was not, assume keep-alive is >= HTTP/1.1.
+        conn.keep_alive = match req.get_header("connection") {
+            Some(value) => value.to_lowercase() == "keep-alive",
+            None => false,
+        };
+
+        let result = match req.method {
+            None => {
+                return self.write_error_response(
+                    HttpStatus::NotImplemented,
+                    conn,
+                    Some("This server does not implement the requested HTTP method.".to_string()),
+                );
+            }
+            Some(HttpMethod::GET) => self.handle_get(&req),
+            Some(HttpMethod::HEAD) => self.handle_get(&req),
+            Some(HttpMethod::POST) => self.handle_post(&req),
+        };
+
+        let (mut resp, response_data, range) = match result {
+            Ok(http_result) => match http_result {
+                HttpResult::Error(http_status, msg) => {
+                    return self.write_error_response(http_status, conn, msg);
+                }
+                HttpResult::Response(resp, response_data, range) => (resp, response_data, range),
+            },
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
         resp.add_header(
             "Connection".to_string(),
             if conn.keep_alive {
@@ -602,10 +639,6 @@ impl HttpTui<'_> {
                 "close".to_string()
             },
         );
-        if let Some(content_type) = mime {
-            // If we want to add a content type, add it
-            resp.add_header("Content-Type".to_string(), content_type.to_string());
-        }
 
         // Write headers
         resp.write_headers_to_stream(&conn.stream)?;
@@ -697,7 +730,7 @@ impl HttpTui<'_> {
         &self,
         status: HttpStatus,
         mut conn: &mut HttpConnection,
-        msg: Option<&str>,
+        msg: Option<String>,
     ) -> Result<ConnectionState, io::Error> {
         let body: String = rendering::render_error(&status, msg);
         let mut resp = HttpResponse::new(status, &HttpVersion::Http1_0);
