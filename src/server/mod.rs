@@ -317,11 +317,7 @@ impl HttpTui<'_> {
                         match self.handle_conn_sigpipe(&mut conn) {
                             Ok(_) => {}
                             Err(error) => {
-                                let _ = self.write_error_response(
-                                    HttpStatus::ServerError,
-                                    conn,
-                                    Some(error.to_string()),
-                                );
+                                let _ = self.history_channel.send(format!("Uncaught OS error while handling connection: {}", error));
                                 // write_error(format!("Server error while reading: {}", error));
                             }
                         };
@@ -368,13 +364,6 @@ impl HttpTui<'_> {
                             eprintln!("Listener socket has errored!");
                             break 'main;
                         } else {
-                            // Ignore the return value of write_error_response, because
-                            // we're closing the connection anyway.
-                            let _ = self.write_error_response(
-                                HttpStatus::ServerError,
-                                connections.get_mut(&fd).unwrap(),
-                                Some("Peer socket in error state".to_string()),
-                            );
                             println!("Got bad state on client socket");
                             connections.remove(&fd);
                         }
@@ -436,7 +425,27 @@ impl HttpTui<'_> {
                     ip_str, code_str, method_str, path_str
                 ));
             }
-            res
+
+            let state = match res {
+                Ok(state) => { state },
+                Err(error) => {
+                    match self.write_error_response(
+                        HttpStatus::ServerError,
+                        conn,
+                        Some(error.to_string()),
+                    ) {
+                        Ok(state) => { state },
+                        Err(e) => { return Err(e) },
+                    }
+                }
+            };
+
+            if state == ConnectionState::WritingResponse {
+                // Force an initial write of the data
+                self.write_partial_response(conn)
+            } else {
+                Ok(state)
+            }
         } else {
             Ok(ConnectionState::ReadingRequest)
         }
@@ -648,8 +657,7 @@ impl HttpTui<'_> {
             }
         };
 
-        // Force an initial write of the data
-        self.write_partial_response(&mut conn)
+        Ok(ConnectionState::WritingResponse)
     }
 
     fn write_partial_response(
@@ -669,7 +677,7 @@ impl HttpTui<'_> {
                 };
                 conn.bytes_sent += amt_written;
                 // If we wrote nothing, we are done
-                amt_written == 0
+                amt_written == 0 || conn.bytes_sent >= conn.bytes_requested
             }
             None => true,
         };
@@ -752,7 +760,6 @@ impl HttpTui<'_> {
         conn.response = Some(resp);
         conn.response_data = data;
 
-        // Force an initial write of the data
-        self.write_partial_response(&mut conn)
+        Ok(ConnectionState::WritingResponse)
     }
 }
