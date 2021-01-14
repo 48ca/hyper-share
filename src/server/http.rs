@@ -162,8 +162,8 @@ fn get_byte_from_hex(tens_dig: u8, ones_dig: u8) -> u8 {
     fn get_byte_from_hex_digit(dig: u8) -> u8 {
         match dig as char {
             '0'..='9' => dig - b'0',
-            'a'..='z' => dig - b'a',
-            'A'..='Z' => dig - b'A',
+            'a'..='z' => dig - b'a' + 10,
+            'A'..='Z' => dig - b'A' + 10,
             _ => panic!("get_byte_from_hex failed: {} = `{}`", dig, dig as char),
         }
     }
