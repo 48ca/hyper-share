@@ -426,13 +426,13 @@ impl HttpTui<'_> {
                     None => "[No path...]",
                 };
                 let method_str = match &conn.last_requested_method {
-                    Some(HttpMethod::GET) => " GET",
+                    Some(HttpMethod::GET) => "GET",
                     Some(HttpMethod::HEAD) => "HEAD",
                     Some(HttpMethod::POST) => "POST",
-                    None => " ???",
+                    None => "???",
                 };
                 let _ = self.history_channel.send(format!(
-                    "{} {} {} {}",
+                    "{:<22} {} {:<4} {}",
                     ip_str, code_str, method_str, path_str
                 ));
             }
