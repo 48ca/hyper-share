@@ -317,7 +317,10 @@ impl HttpTui<'_> {
                         match self.handle_conn_sigpipe(&mut conn) {
                             Ok(_) => {}
                             Err(error) => {
-                                let _ = self.history_channel.send(format!("Uncaught OS error while handling connection: {}", error));
+                                let _ = self.history_channel.send(format!(
+                                    "Uncaught OS error while handling connection: {}",
+                                    error
+                                ));
                                 // write_error(format!("Server error while reading: {}", error));
                             }
                         };
@@ -427,15 +430,15 @@ impl HttpTui<'_> {
             }
 
             let state = match res {
-                Ok(state) => { state },
+                Ok(state) => state,
                 Err(error) => {
-                    match self.write_error_response(
+                    match self.create_error_response(
                         HttpStatus::ServerError,
                         conn,
                         Some(error.to_string()),
                     ) {
-                        Ok(state) => { state },
-                        Err(e) => { return Err(e) },
+                        Ok(state) => state,
+                        Err(e) => return Err(e),
                     }
                 }
             };
@@ -596,7 +599,7 @@ impl HttpTui<'_> {
             Err(status) => {
                 // Kill the connection if we get invalid data
                 conn.keep_alive = false;
-                return self.write_error_response(
+                return self.create_error_response(
                     status,
                     conn,
                     Some("Could not decode request.".to_string()),
@@ -617,7 +620,7 @@ impl HttpTui<'_> {
 
         let result = match req.method {
             None => {
-                return self.write_error_response(
+                return self.create_error_response(
                     HttpStatus::NotImplemented,
                     conn,
                     Some("This server does not implement the requested HTTP method.".to_string()),
@@ -630,7 +633,7 @@ impl HttpTui<'_> {
 
         let (mut resp, response_data, range) = match result {
             HttpResult::Error(http_status, msg) => {
-                return self.write_error_response(http_status, conn, msg);
+                return self.create_error_response(http_status, conn, msg);
             }
             HttpResult::Response(resp, response_data, range) => (resp, response_data, range),
         };
@@ -729,7 +732,7 @@ impl HttpTui<'_> {
         Ok(())
     }
 
-    fn write_error_response(
+    fn create_error_response(
         &self,
         status: HttpStatus,
         mut conn: &mut HttpConnection,
