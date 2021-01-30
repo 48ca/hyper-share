@@ -220,6 +220,7 @@ pub struct HttpTui<'a> {
     listener: TcpListener,
     root_dir: &'a Path,
     history_channel: mpsc::Sender<String>,
+    dir_listings: bool,
 }
 
 impl HttpTui<'_> {
@@ -228,12 +229,14 @@ impl HttpTui<'_> {
         port: u16,
         root_dir: &'a Path,
         sender: mpsc::Sender<String>,
+        dir_listings: bool,
     ) -> Result<HttpTui<'a>, io::Error> {
         let listener = TcpListener::bind(format!("{mask}:{port}", mask = host, port = port))?;
         Ok(HttpTui {
             listener: listener,
             root_dir: root_dir,
             history_channel: sender,
+            dir_listings: dir_listings,
         })
     }
 
@@ -502,6 +505,13 @@ impl HttpTui<'_> {
             return Ok(HttpResult::Error(
                 HttpStatus::PermissionDenied,
                 Some(format!("Attempted to read an irregular file.")),
+            ));
+        }
+
+        if !self.dir_listings && metadata.is_dir() {
+            return Ok(HttpResult::Error(
+                HttpStatus::PermissionDenied,
+                Some(format!("Unable to list this directory.")),
             ));
         }
 

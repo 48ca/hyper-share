@@ -43,6 +43,8 @@ struct Opts {
     port: u16,
     #[clap(short, long, default_value = "127.0.0.1")]
     host: String,
+    #[clap(long = "nodirs")]
+    disable_directory_listings: bool,
 }
 
 struct ConnectionSpeedMeasurement {
@@ -277,7 +279,13 @@ fn main() -> Result<(), io::Error> {
 
     let (hist_tx, hist_rx) = mpsc::channel();
 
-    let mut tui = match HttpTui::new(&opts.host, opts.port, &canon_path.as_path(), hist_tx) {
+    let mut tui = match HttpTui::new(
+        &opts.host,
+        opts.port,
+        &canon_path.as_path(),
+        hist_tx,
+        !opts.disable_directory_listings,
+    ) {
         Ok(tui) => tui,
         Err(e) => {
             eprintln!("Failed to bind to port {}: {}", opts.port, e);
