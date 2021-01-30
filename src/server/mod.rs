@@ -1,4 +1,4 @@
-mod http;
+mod http_core;
 mod rendering;
 
 use std::net::SocketAddr;
@@ -26,7 +26,7 @@ use std::sync::mpsc;
 
 use std::path::Path;
 
-use http::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion};
+use http_core::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion};
 
 const BUFFER_SIZE: usize = 4096;
 

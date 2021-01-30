@@ -4,7 +4,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::io::Read;
 
-use crate::server::http;
+use crate::server::http_core;
 
 const GIT_HASH: &'static str = env!("GIT_HASH");
 
@@ -309,7 +309,7 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
     html.render()
 }
 
-pub fn render_error(status: &http::HttpStatus, msg: Option<String>) -> String {
+pub fn render_error(status: &http_core::HttpStatus, msg: Option<String>) -> String {
     let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
     let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
     let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);
@@ -324,8 +324,8 @@ pub fn render_error(status: &http::HttpStatus, msg: Option<String>) -> String {
 
     h1.add_text(format!(
         "{} {}",
-        http::status_to_code(status),
-        http::status_to_message(status)
+        http_core::status_to_code(status),
+        http_core::status_to_message(status)
     ));
     body.add_child(h1);
 
