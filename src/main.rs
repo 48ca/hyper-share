@@ -479,8 +479,6 @@ fn display(
             })?;
         }
 
-        needs_update.store(true, Ordering::Release);
-
         loop {
             match rx.try_recv() {
                 Ok(ControlEvent::Quit) => {
@@ -503,6 +501,11 @@ fn display(
         // If we don't chill a little, we'll actually slow down the http server
         // because we'll be doing a ton of copies.
         thread::sleep(time::Duration::from_millis(100));
+
+        needs_update.store(true, Ordering::Release);
+
+        // Poke `select` to give us more information.
+        let _ = unistd::write(write_end, b"p");
     }
 
     let _ = unistd::close(write_end);

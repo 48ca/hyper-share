@@ -2,7 +2,6 @@ mod http_core;
 mod rendering;
 
 use nix::unistd;
-use nix::sys::time::{TimeVal, TimeValLike};
 
 use std::net::SocketAddr;
 use std::net::TcpListener;
@@ -241,7 +240,7 @@ impl HttpTui<'_> {
                 Some(&mut r_fds),
                 Some(&mut w_fds),
                 Some(&mut e_fds),
-                Some(&mut TimeVal::microseconds(1000)),
+                None,
             ) {
                 Ok(_res) => {}
                 Err(e) => {
@@ -268,6 +267,11 @@ impl HttpTui<'_> {
                                 }
                                 if buf[0] as char == 't' {
                                     self.disabled = !self.disabled;
+                                }
+                                if buf[0] as char == 'p' {
+                                    // Poked :)
+                                    // This is used to trigger another call
+                                    // to `func`.
                                 }
                                 continue;
                             } else {
@@ -340,7 +344,11 @@ impl HttpTui<'_> {
                 }
             }
 
-            let to_remove: Vec<_> = connections.iter().filter(|&(_, conn)| conn.state == ConnectionState::Closing).map(|(k, _)| k.clone()).collect();
+            let to_remove: Vec<_> = connections
+                .iter()
+                .filter(|&(_, conn)| conn.state == ConnectionState::Closing)
+                .map(|(k, _)| k.clone())
+                .collect();
             for fd in to_remove {
                 connections.remove(&fd);
             }
@@ -596,7 +604,6 @@ impl HttpTui<'_> {
             return self.create_error_response(HttpStatus::ServiceUnavailable,
                                               conn, Some("This server has been temporarily disabled. Please contact the administrator to re-enable it.".to_string()));
         }
-
 
         // Check if keep-alive header was given in the request.
         // If it was not, assume keep-alive is >= HTTP/1.1.
