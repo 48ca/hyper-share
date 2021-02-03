@@ -194,6 +194,7 @@ impl HttpTui<'_> {
         root_dir: &'a Path,
         sender: mpsc::Sender<String>,
         dir_listings: bool,
+        disabled: bool,
     ) -> Result<HttpTui<'a>, io::Error> {
         let listener = TcpListener::bind(format!("{mask}:{port}", mask = host, port = port))?;
         Ok(HttpTui {
@@ -201,7 +202,7 @@ impl HttpTui<'_> {
             root_dir: root_dir,
             history_channel: sender,
             dir_listings: dir_listings,
-            disabled: false,
+            disabled: disabled,
         })
     }
 

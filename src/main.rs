@@ -46,6 +46,8 @@ struct Opts {
     host: String,
     #[clap(long = "nodirs")]
     disable_directory_listings: bool,
+    #[clap(long = "start-disabled")]
+    start_disabled: bool,
 }
 
 struct ConnectionSpeedMeasurement {
@@ -287,6 +289,7 @@ fn main() -> Result<(), io::Error> {
         &canon_path.as_path(),
         hist_tx,
         !opts.disable_directory_listings,
+        opts.start_disabled,
     ) {
         Ok(tui) => tui,
         Err(e) => {
@@ -319,6 +322,7 @@ fn main() -> Result<(), io::Error> {
             rx,
             &needs_update_clone,
             write_end,
+            !opts.start_disabled,
         );
     });
 
@@ -408,14 +412,12 @@ fn display(
     rx: mpsc::Receiver<ControlEvent>,
     needs_update: &AtomicBool,
     write_end: RawFd,
+    mut enabled: bool,
 ) -> Result<(), io::Error> {
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-
-    // If you change this, you must change the default initializer for HttpTui.
-    let mut enabled = true;
 
     'outer: loop {
         // if needs_update was false, it has been updated
