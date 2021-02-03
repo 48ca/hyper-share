@@ -273,27 +273,20 @@ impl HttpTui<'_> {
                                 break 'main;
                             }
                         }
-                        let peer_fd = if fd == l_raw_fd {
+                        if fd == l_raw_fd {
                             // If listener, get accept new connection and add it.
-                            // Then pass back the new peer fd to do an immediate read
-                            match self.listener.accept() {
-                                Ok((stream, _addr)) => {
-                                    let conn = HttpTui::create_http_connection(stream);
-                                    let pfd = conn.stream.as_raw_fd();
-                                    connections.insert(pfd, conn);
-                                    pfd
-                                }
-                                _ => {
-                                    continue;
-                                }
+                            if let Ok((stream, _addr)) = self.listener.accept() {
+                                let conn = HttpTui::create_http_connection(stream);
+                                let pfd = conn.stream.as_raw_fd();
+                                connections.insert(pfd, conn);
                             }
-                        } else {
-                            // We have selected a peer fd, so just use that one
-                            fd
-                        };
-                        assert_eq!(connections[&peer_fd].state, ConnectionState::ReadingRequest);
+                            // We cannot pass this new connection to handle_conn immediately,
+                            // as we don't know if there is any data for us to read yet.
+                            continue;
+                        }
+                        assert_eq!(connections[&fd].state, ConnectionState::ReadingRequest);
                         // TODO: Error checking here
-                        let mut conn = connections.get_mut(&peer_fd).unwrap();
+                        let mut conn = connections.get_mut(&fd).unwrap();
                         match self.handle_conn_sigpipe(&mut conn) {
                             Ok(_) => {}
                             Err(error) => {
@@ -304,9 +297,9 @@ impl HttpTui<'_> {
                                 // write_error(format!("Server error while reading: {}", error));
                             }
                         };
-                        if connections[&peer_fd].state == ConnectionState::Closing {
+                        if connections[&fd].state == ConnectionState::Closing {
                             // Delete to close connection
-                            connections.remove(&peer_fd);
+                            connections.remove(&fd);
                         }
                     }
                 }
@@ -581,11 +574,6 @@ impl HttpTui<'_> {
     }
 
     fn handle_request(&self, mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
-        if self.disabled {
-            return self.create_error_response(HttpStatus::ServiceUnavailable,
-                                              conn, Some("This server has been temporarily disabled. Please contact the administrator to re-enable it.".to_string()));
-        }
-
         let body = &mut conn.buffer[..conn.bytes_read];
 
         let req: HttpRequest = match decode_request(body) {
@@ -604,6 +592,13 @@ impl HttpTui<'_> {
         conn.last_requested_uri = Some(req.path.to_string());
         conn.last_requested_method = req.method.clone();
         conn.num_requests += 1;
+
+        if self.disabled {
+            conn.keep_alive = false;
+            return self.create_error_response(HttpStatus::ServiceUnavailable,
+                                              conn, Some("This server has been temporarily disabled. Please contact the administrator to re-enable it.".to_string()));
+        }
+
 
         // Check if keep-alive header was given in the request.
         // If it was not, assume keep-alive is >= HTTP/1.1.
