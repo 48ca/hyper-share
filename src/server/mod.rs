@@ -1,16 +1,17 @@
 mod http_core;
 mod rendering;
 
+use nix::unistd;
+
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
 
 use std::cmp::{max, min};
 
-use std::io;
-use std::io::{Read, Seek, SeekFrom};
-
 use std::str::from_utf8;
+
+use std::io::{self, Read, Seek};
 
 use std::fs;
 
@@ -26,6 +27,7 @@ use std::sync::mpsc;
 
 use std::path::Path;
 
+use http_core::types::{ResponseDataType, SeekableString};
 use http_core::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion};
 
 const BUFFER_SIZE: usize = 4096;
@@ -128,43 +130,6 @@ pub enum ConnectionState {
     Closing,
 }
 
-pub struct SeekableString {
-    pub start: usize,
-    pub data: String,
-}
-
-impl SeekableString {
-    pub fn new(d: String) -> SeekableString {
-        SeekableString { start: 0, data: d }
-    }
-}
-
-impl Read for SeekableString {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        let mut slice = &self.data.as_bytes()[self.start..];
-        let read = slice.read(buf)?;
-        self.start += read;
-        Ok(read)
-    }
-}
-
-impl Seek for SeekableString {
-    fn seek(&mut self, pos: SeekFrom) -> Result<u64, io::Error> {
-        self.start = match pos {
-            SeekFrom::Start(i) => i as usize,
-            SeekFrom::Current(i) => ((self.start as i64) + i) as usize,
-            SeekFrom::End(i) => ((self.data.len() as i64) - i) as usize,
-        };
-        Ok(self.start as u64)
-    }
-}
-
-pub enum ResponseDataType {
-    None,
-    StringSegment(SeekableString),
-    FileSegment(fs::File),
-}
-
 pub struct HttpConnection {
     pub stream: TcpStream,
     pub state: ConnectionState,
@@ -174,7 +139,6 @@ pub struct HttpConnection {
     pub bytes_read: usize,
 
     // Space to store a per-request string response
-    pub response_data: ResponseDataType,
     pub response: Option<HttpResponse>,
 
     pub last_requested_method: Option<HttpMethod>,
@@ -194,7 +158,6 @@ impl HttpConnection {
             state: ConnectionState::ReadingRequest,
             buffer: [0; BUFFER_SIZE],
             bytes_read: 0,
-            response_data: ResponseDataType::None,
             response: None,
             keep_alive: true,
             bytes_requested: 0,
@@ -212,7 +175,7 @@ impl HttpConnection {
 }
 
 enum HttpResult {
-    Response(HttpResponse, ResponseDataType, usize),
+    Response(HttpResponse, usize),
     Error(HttpStatus, Option<String>),
 }
 
@@ -221,6 +184,7 @@ pub struct HttpTui<'a> {
     root_dir: &'a Path,
     history_channel: mpsc::Sender<String>,
     dir_listings: bool,
+    disabled: bool,
 }
 
 impl HttpTui<'_> {
@@ -237,6 +201,7 @@ impl HttpTui<'_> {
             root_dir: root_dir,
             history_channel: sender,
             dir_listings: dir_listings,
+            disabled: false,
         })
     }
 
@@ -292,9 +257,20 @@ impl HttpTui<'_> {
                         }
                         // if !connections.contains_key(&fd) { continue; }
 
-                        // If we have data to read on the pipe, we need to close
+                        // If we have data to read on the pipe
                         if fd == pipe_read {
-                            break 'main;
+                            let mut buf: [u8; 1] = [0; 1];
+                            if let Ok(size) = unistd::read(pipe_read, &mut buf[..]) {
+                                if size == 0 {
+                                    break 'main;
+                                }
+                                if buf[0] as char == 't' {
+                                    self.disabled = !self.disabled;
+                                }
+                                continue;
+                            } else {
+                                break 'main;
+                            }
                         }
                         let peer_fd = if fd == l_raw_fd {
                             // If listener, get accept new connection and add it.
@@ -459,7 +435,7 @@ impl HttpTui<'_> {
 
     fn handle_post(&self, req: &HttpRequest) -> Result<HttpResult, io::Error> {
         let resp = HttpResponse::new(HttpStatus::OK, &req.version);
-        Ok(HttpResult::Response(resp, ResponseDataType::None, 0))
+        Ok(HttpResult::Response(resp, 0))
     }
 
     fn handle_get(&self, req: &HttpRequest) -> Result<HttpResult, io::Error> {
@@ -518,10 +494,10 @@ impl HttpTui<'_> {
         let (mut response_data, full_length, mime) = if metadata.is_dir() {
             let s: String = rendering::render_directory(normalized_path, canonical_path.as_path());
             let len = s.len();
-            let data = ResponseDataType::StringSegment(SeekableString::new(s));
+            let data = ResponseDataType::String(SeekableString::new(s));
             (data, len, Some("text/html"))
         } else {
-            let data = ResponseDataType::FileSegment(fs::File::open(&canonical_path)?);
+            let data = ResponseDataType::File(fs::File::open(&canonical_path)?);
             let len = if metadata.is_file() {
                 metadata.len() as usize
             } else {
@@ -583,10 +559,10 @@ impl HttpTui<'_> {
                 ),
             );
             match response_data {
-                ResponseDataType::StringSegment(ref mut seg) => {
+                ResponseDataType::String(ref mut seg) => {
                     seg.seek(io::SeekFrom::Start((start) as u64))?;
                 }
-                ResponseDataType::FileSegment(ref mut file) => {
+                ResponseDataType::File(ref mut file) => {
                     file.seek(io::SeekFrom::Start((start) as u64))?;
                 }
                 _ => {}
@@ -598,10 +574,17 @@ impl HttpTui<'_> {
             resp.add_header("Content-Type".to_string(), content_type.to_string());
         }
 
-        Ok(HttpResult::Response(resp, response_data, range))
+        resp.add_body(response_data);
+
+        Ok(HttpResult::Response(resp, range))
     }
 
     fn handle_request(&self, mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
+        if self.disabled {
+            return self.create_error_response(HttpStatus::ServiceUnavailable,
+                                              conn, Some("This server has been temporarily disabled. Please contact the administrator to re-enable it.".to_string()));
+        }
+
         let body = &mut conn.buffer[..conn.bytes_read];
 
         let req: HttpRequest = match decode_request(body) {
@@ -641,11 +624,11 @@ impl HttpTui<'_> {
             Some(HttpMethod::POST) => self.handle_post(&req)?,
         };
 
-        let (mut resp, response_data, range) = match result {
+        let (mut resp, range) = match result {
             HttpResult::Error(http_status, msg) => {
                 return self.create_error_response(http_status, conn, msg);
             }
-            HttpResult::Response(resp, response_data, range) => (resp, response_data, range),
+            HttpResult::Response(resp, range) => (resp, range),
         };
 
         resp.add_header(
@@ -660,15 +643,13 @@ impl HttpTui<'_> {
         // Write headers
         resp.write_headers_to_stream(&conn.stream)?;
 
-        conn.response = Some(resp);
+        // If method is HEAD, remove the response body
+        if req.method.unwrap_or(HttpMethod::HEAD) == HttpMethod::HEAD {
+            resp.clear_body();
+        }
 
-        conn.response_data = match req.method.unwrap() {
-            HttpMethod::HEAD => ResponseDataType::None,
-            _ => {
-                conn.bytes_requested += range;
-                response_data
-            }
-        };
+        conn.response = Some(resp);
+        conn.bytes_requested += range;
 
         Ok(ConnectionState::WritingResponse)
     }
@@ -679,15 +660,7 @@ impl HttpTui<'_> {
     ) -> Result<ConnectionState, io::Error> {
         let done = match &mut conn.response {
             Some(ref mut resp) => {
-                let amt_written = match &mut conn.response_data {
-                    ResponseDataType::StringSegment(ref mut seg) => {
-                        resp.partial_write_to_stream(seg, &conn.stream)?
-                    }
-                    ResponseDataType::FileSegment(ref mut file) => {
-                        resp.partial_write_to_stream(file, &conn.stream)?
-                    }
-                    ResponseDataType::None => 0,
-                };
+                let amt_written = resp.partial_write_to_stream(&conn.stream)?;
                 conn.bytes_sent += amt_written;
                 // If we wrote nothing, we are done
                 amt_written == 0 || conn.bytes_sent >= conn.bytes_requested
@@ -705,7 +678,7 @@ impl HttpTui<'_> {
             }
         }
 
-        return Ok(ConnectionState::WritingResponse);
+        Ok(ConnectionState::WritingResponse)
     }
 
     fn create_http_connection(stream: TcpStream) -> HttpConnection {
@@ -765,13 +738,13 @@ impl HttpTui<'_> {
         // Add content-length to bytes requested
         conn.bytes_requested += body.len();
 
-        let data = ResponseDataType::StringSegment(SeekableString::new(body));
+        let data = ResponseDataType::String(SeekableString::new(body));
 
         // Write headers
         resp.write_headers_to_stream(&conn.stream)?;
+        resp.add_body(data);
 
         conn.response = Some(resp);
-        conn.response_data = data;
 
         Ok(ConnectionState::WritingResponse)
     }

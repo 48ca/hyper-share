@@ -33,6 +33,7 @@ use server::{HttpConnection, HttpTui};
 use std::net::SocketAddr;
 
 use nix::unistd;
+use std::os::unix::io::RawFd;
 
 #[derive(Clap)]
 #[clap(version = "1.0", author = "James Houghton <jhoughton@virginia.edu>")]
@@ -264,6 +265,7 @@ impl ConnectionSet {
 
 enum ControlEvent {
     Quit,
+    Toggle,
 }
 
 fn main() -> Result<(), io::Error> {
@@ -316,9 +318,8 @@ fn main() -> Result<(), io::Error> {
             connection_set_ptr,
             rx,
             &needs_update_clone,
+            write_end,
         );
-        let _ = unistd::write(write_end, "\0".as_bytes());
-        let _ = unistd::close(write_end);
     });
 
     let keys = thread::spawn(move || {
@@ -329,6 +330,9 @@ fn main() -> Result<(), io::Error> {
                     Key::Char('q') => {
                         let _ = tx.send(ControlEvent::Quit);
                         break;
+                    }
+                    Key::Char(' ') => {
+                        let _ = tx.send(ControlEvent::Toggle);
                     }
                     _ => {}
                 }
@@ -403,11 +407,15 @@ fn display(
     connection_set: Arc<Mutex<ConnectionSet>>,
     rx: mpsc::Receiver<ControlEvent>,
     needs_update: &AtomicBool,
+    write_end: RawFd,
 ) -> Result<(), io::Error> {
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // If you change this, you must change the default initializer for HttpTui.
+    let mut enabled = true;
 
     'outer: loop {
         // if needs_update was false, it has been updated
@@ -438,7 +446,7 @@ fn display(
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Length(3),
+                            Constraint::Length(4),
                             Constraint::Min(2),
                             Constraint::Percentage(50),
                         ]
@@ -446,10 +454,16 @@ fn display(
                     )
                     .split(f.size());
 
-                let block = List::new(vec![ListItem::new(vec![Spans::from(Span::raw(format!(
-                    "Serving {}",
-                    root_path
-                )))])])
+                let block = List::new(vec![
+                    ListItem::new(vec![Spans::from(Span::raw(format!(
+                        "Serving {}",
+                        root_path
+                    )))]),
+                    ListItem::new(vec![Spans::from(Span::raw(format!(
+                        "{}",
+                        if enabled { "Enabled" } else { "Disabled" }
+                    )))]),
+                ])
                 .block(Block::default().borders(Borders::ALL).title("Information"));
                 f.render_widget(block, chunks[0]);
 
@@ -471,6 +485,11 @@ fn display(
                 Ok(ControlEvent::Quit) => {
                     break 'outer;
                 }
+                Ok(ControlEvent::Toggle) => {
+                    let _ = unistd::write(write_end, b"t");
+                    enabled = !enabled;
+                    break;
+                }
                 Err(mpsc::TryRecvError::Empty) => {
                     break;
                 }
@@ -484,6 +503,8 @@ fn display(
         // because we'll be doing a ton of copies.
         thread::sleep(time::Duration::from_millis(100));
     }
+
+    let _ = unistd::close(write_end);
 
     Ok(())
 }

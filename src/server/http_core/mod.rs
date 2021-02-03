@@ -4,9 +4,13 @@ use regex::{Captures, Regex};
 use std::boxed::Box;
 use std::cmp::min;
 use std::io;
-use std::io::Write;
 use std::mem;
 use std::net::TcpStream;
+
+use std::io::Write;
+
+pub mod types;
+use types::ResponseDataType;
 
 #[derive(PartialEq, Clone)]
 pub enum HttpMethod {
@@ -39,6 +43,7 @@ pub enum HttpStatus {
     RequestHeadersTooLarge,  // 431
     ServerError,             // 500
     NotImplemented,          // 501
+    ServiceUnavailable,      // 503
     HttpVersionNotSupported, // 505
 }
 
@@ -52,6 +57,7 @@ pub fn status_to_code(status: &HttpStatus) -> u16 {
         HttpStatus::RequestHeadersTooLarge => 431,
         HttpStatus::ServerError => 500,
         HttpStatus::NotImplemented => 501,
+        HttpStatus::ServiceUnavailable => 503,
         HttpStatus::HttpVersionNotSupported => 505,
     }
 }
@@ -66,6 +72,7 @@ pub fn status_to_message(status: &HttpStatus) -> &'static str {
         HttpStatus::RequestHeadersTooLarge => "Request header fields too large",
         HttpStatus::ServerError => "Server error",
         HttpStatus::NotImplemented => "Method not implemented",
+        HttpStatus::ServiceUnavailable => "Service unavailable",
         HttpStatus::HttpVersionNotSupported => "HTTP version not supported",
     }
 }
@@ -192,6 +199,7 @@ pub struct HttpResponse {
     headers: HttpHeaderSet,
     headers_written: bool,
     last_write_length: usize,
+    data: ResponseDataType,
     buffer: Box<[u8; BUFFER_SIZE]>,
     bytes_to_write: usize,
 }
@@ -206,8 +214,17 @@ impl HttpResponse {
             headers_written: false,
             last_write_length: BUFFER_SIZE,
             buffer: Box::new(buf),
+            data: ResponseDataType::None,
             bytes_to_write: 0,
         }
+    }
+
+    pub fn add_body(&mut self, data: ResponseDataType) {
+        self.data = data;
+    }
+
+    pub fn clear_body(&mut self) {
+        self.data = ResponseDataType::None;
     }
 
     pub fn add_header(&mut self, key: String, value: String) {
@@ -227,17 +244,6 @@ impl HttpResponse {
 
     pub fn get_code(&self) -> String {
         status_to_code(&self.status).to_string()
-    }
-
-    #[allow(dead_code)]
-    fn write_fully(buffer: &[u8], mut stream: &TcpStream) -> Result<(), io::Error> {
-        let amt_to_write: usize = buffer.len();
-        let mut amt_written: usize = 0;
-        while amt_written < amt_to_write {
-            amt_written += stream.write(&buffer[amt_written..amt_to_write])?;
-        }
-
-        Ok(())
     }
 
     pub fn write_headers_to_stream(&mut self, mut stream: &TcpStream) -> Result<(), io::Error> {
@@ -264,38 +270,52 @@ impl HttpResponse {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn write_to_stream<T>(&mut self, body: &mut T, stream: &TcpStream) -> Result<(), io::Error>
-    where
-        T: io::Read + io::Seek,
-    {
-        self.write_headers_to_stream(stream)?;
-        while self.partial_write_to_stream(body, stream)? > 0 {}
-        Ok(())
-    }
-
-    pub fn partial_write_to_stream<T>(
-        &mut self,
-        body: &mut T,
-        mut stream: &TcpStream,
-    ) -> Result<usize, io::Error>
-    where
-        T: io::Read + io::Seek,
-    {
+    pub fn partial_write_to_stream(&mut self, stream: &TcpStream) -> Result<usize, io::Error> {
         assert_eq!(self.headers_written, true);
-        let write_length = min(self.bytes_to_write, BUFFER_SIZE);
-        // let write_length = min(self.last_write_length + 4096, BUFFER_SIZE);
-        let amt_read = body.read(&mut self.buffer[..write_length])?;
-        if amt_read == 0 {
-            return Ok(0);
+        let amt_written = match self.data {
+            ResponseDataType::String(ref mut s) => generic_partial_write_to_stream(
+                self.bytes_to_write,
+                &mut self.buffer[..],
+                s,
+                stream,
+            ),
+            ResponseDataType::File(ref mut fle) => generic_partial_write_to_stream(
+                self.bytes_to_write,
+                &mut self.buffer[..],
+                fle,
+                stream,
+            ),
+            ResponseDataType::None => Ok(0),
+        };
+
+        if let Ok(amt) = amt_written {
+            self.last_write_length = amt;
+            self.bytes_to_write -= amt;
         }
-        // HttpResponse::write_fully(&buffer[..amt_read], stream)?;
-        let amt_written = stream.write(&self.buffer[..amt_read])?;
-        if amt_written < amt_read {
-            body.seek(io::SeekFrom::Current((amt_read - amt_written) as i64))?;
-        }
-        self.last_write_length = amt_written;
-        self.bytes_to_write -= amt_written;
-        Ok(amt_written)
+
+        amt_written
     }
+}
+
+fn generic_partial_write_to_stream<T>(
+    bytes_to_write: usize,
+    buffer: &mut [u8],
+    body: &mut T,
+    mut stream: &TcpStream,
+) -> Result<usize, io::Error>
+where
+    T: io::Seek + io::Read,
+{
+    let write_length = min(bytes_to_write, BUFFER_SIZE);
+    // let write_length = min(self.last_write_length + 4096, BUFFER_SIZE);
+    let amt_read = body.read(&mut buffer[..write_length])?;
+    if amt_read == 0 {
+        return Ok(0);
+    }
+    // HttpResponse::write_fully(&buffer[..amt_read], stream)?;
+    let amt_written = stream.write(&buffer[..amt_read])?;
+    if amt_written < amt_read {
+        body.seek(io::SeekFrom::Current((amt_read - amt_written) as i64))?;
+    }
+    Ok(amt_written)
 }
