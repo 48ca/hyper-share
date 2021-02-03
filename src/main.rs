@@ -345,7 +345,7 @@ fn main() -> Result<(), io::Error> {
     });
 
     tui.run(read_end, move |connections| {
-        if connection_set_needs_update.swap(false, Ordering::Relaxed) {
+        if connection_set_needs_update.load(Ordering::Acquire) {
             let mut conn_set = connection_set.lock().unwrap();
             conn_set.update(&connections);
             loop {
@@ -361,6 +361,7 @@ fn main() -> Result<(), io::Error> {
                     }
                 }
             }
+            connection_set_needs_update.store(false, Ordering::Release);
         }
     });
 
@@ -420,12 +421,8 @@ fn display(
     let mut terminal = Terminal::new(backend)?;
 
     'outer: loop {
-        // if needs_update was false, it has been updated
-        // if !needs_update.swap(true, Ordering::Relaxed) {
-        if true {
-            needs_update.store(true, Ordering::Relaxed);
-
-            // Print that the connection has been established
+        // Print that the connection has been established
+        {
             let conn_set = &mut connection_set.lock().unwrap();
             let conns = &mut conn_set.connections;
 
@@ -463,7 +460,7 @@ fn display(
                     )))]),
                     ListItem::new(vec![Spans::from(Span::raw(format!(
                         "{}",
-                        if enabled { "Enabled" } else { "Disabled" }
+                        if enabled { "Enabled" } else { "Disabled" },
                     )))]),
                 ])
                 .block(Block::default().borders(Borders::ALL).title("Information"));
@@ -481,6 +478,8 @@ fn display(
                 f.render_widget(block, chunks[2]);
             })?;
         }
+
+        needs_update.store(true, Ordering::Release);
 
         loop {
             match rx.try_recv() {

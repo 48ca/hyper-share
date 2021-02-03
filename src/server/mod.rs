@@ -2,6 +2,7 @@ mod http_core;
 mod rendering;
 
 use nix::unistd;
+use nix::sys::time::{TimeVal, TimeValLike};
 
 use std::net::SocketAddr;
 use std::net::TcpListener;
@@ -240,7 +241,7 @@ impl HttpTui<'_> {
                 Some(&mut r_fds),
                 Some(&mut w_fds),
                 Some(&mut e_fds),
-                None,
+                Some(&mut TimeVal::microseconds(1000)),
             ) {
                 Ok(_res) => {}
                 Err(e) => {
@@ -297,10 +298,6 @@ impl HttpTui<'_> {
                                 // write_error(format!("Server error while reading: {}", error));
                             }
                         };
-                        if connections[&fd].state == ConnectionState::Closing {
-                            // Delete to close connection
-                            connections.remove(&fd);
-                        }
                     }
                 }
             }
@@ -316,10 +313,6 @@ impl HttpTui<'_> {
                         match self.handle_conn_sigpipe(&mut connections.get_mut(&fd).unwrap()) {
                             Ok(_) => {}
                             _ => {} // Err(error) => { write_error(format!("Server error while writing: {}", error)); }
-                        }
-                        if connections[&fd].state == ConnectionState::Closing {
-                            // Delete to close connection
-                            connections.remove(&fd);
                         }
                     }
                 }
@@ -345,6 +338,11 @@ impl HttpTui<'_> {
                         }
                     }
                 }
+            }
+
+            let to_remove: Vec<_> = connections.iter().filter(|&(_, conn)| conn.state == ConnectionState::Closing).map(|(k, _)| k.clone()).collect();
+            for fd in to_remove {
+                connections.remove(&fd);
             }
             func(&connections);
         }
