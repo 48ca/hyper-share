@@ -44,10 +44,20 @@ struct Opts {
     port: u16,
     #[clap(short, long, default_value = "127.0.0.1")]
     host: String,
-    #[clap(long = "nodirs")]
+    #[clap(long = "nodirs", about = "Disable directory listings.")]
     disable_directory_listings: bool,
-    #[clap(long = "start-disabled")]
+    #[clap(
+        long = "start-disabled",
+        about = "Start the server as disabled. Files will not be served until the server is enabled."
+    )]
     start_disabled: bool,
+    #[clap(
+        short = 'r',
+        long = "ui-refresh-rate",
+        default_value = "100",
+        about = "In milliseconds, how often the UI will be updated."
+    )]
+    ui_refresh_rate: u64,
 }
 
 struct ConnectionSpeedMeasurement {
@@ -522,7 +532,7 @@ fn display(
 
         // If we don't chill a little, we'll actually slow down the http server
         // because we'll be doing a ton of copies.
-        thread::sleep(time::Duration::from_millis(100));
+        thread::sleep(time::Duration::from_millis(opts.ui_refresh_rate));
 
         needs_update.store(true, Ordering::Release);
 
