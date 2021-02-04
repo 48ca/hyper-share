@@ -3,6 +3,10 @@ mod rendering;
 
 use nix::unistd;
 
+use std::fs::OpenOptions;
+
+use std::path::PathBuf;
+
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -11,7 +15,7 @@ use std::cmp::{max, min};
 
 use std::str::from_utf8;
 
-use std::io::{self, Read, Seek};
+use std::io::{self, Read, Seek, Write};
 
 use std::fs;
 
@@ -157,20 +161,156 @@ pub enum ConnectionState {
     Closing,
 }
 
+pub enum PostRequestState {
+    AwaitingFirstBody,
+    AwaitingBody,
+    AwaitingMeta,
+}
+
 pub struct PostBuffer {
     pub fill_location: usize,
     pub buffer: Box<[u8; POST_BUFFER_SIZE]>,
     pub post_delimeter: BMByte,
+    pub post_delimeter_string: String,
     pub current_file: Option<fs::File>,
+    pub state: PostRequestState,
+    pub dir: PathBuf,
 }
 
 impl PostBuffer {
-    pub fn new(delim: BMByte) -> PostBuffer {
+    pub fn new(dir: PathBuf, delim: BMByte, delim_str: String) -> PostBuffer {
         PostBuffer {
             buffer: Box::new([0; POST_BUFFER_SIZE]),
             fill_location: 0,
             post_delimeter: delim,
+            post_delimeter_string: delim_str,
             current_file: None,
+            state: PostRequestState::AwaitingFirstBody,
+            dir: dir,
+        }
+    }
+
+    fn find_next_delim(&self, start: usize) -> Option<usize> {
+        let vec = self
+            .post_delimeter
+            .find_in(BMBuf(&self.buffer[start..self.fill_location]), 1);
+        if vec.len() < 1 {
+            None
+        } else {
+            Some(vec[0] + start)
+        }
+    }
+
+    pub fn handle_new_data(&mut self) -> Result<bool, String> {
+        let mut parse_idx: usize = 0;
+        loop {
+            match self.state {
+                PostRequestState::AwaitingFirstBody => {
+                    parse_idx = match self.find_next_delim(parse_idx) {
+                        None => {
+                            // Cannot find the delimeter, so keep reading. This is good
+                            // for slow connections. If we can't find the delimeter in 4M
+                            // eventually `read` will return 0 and the connection will be
+                            // aborted.
+                            return Ok(true);
+                        }
+                        Some(idx) => idx + self.post_delimeter_string.len(),
+                    };
+
+                    let body_start =
+                        match find_body_start(&self.buffer[parse_idx..self.fill_location]) {
+                            Some(idx) => idx + parse_idx,
+                            None => {
+                                self.state = PostRequestState::AwaitingMeta;
+                                return Ok(false);
+                            }
+                        };
+
+                    parse_idx = body_start;
+
+                    let meta = &self.buffer[parse_idx..body_start];
+                    let meta_str = String::from_utf8_lossy(meta).to_string();
+                    let (content_disp, info) = meta_str.split_at(match meta_str.find(":") {
+                        Some(idx) => idx,
+                        None => {
+                            return Err("Could not find ':' in Content-Disposition".to_string());
+                        }
+                    });
+                    if content_disp.to_lowercase() != "content-disposition" {
+                        return Err("Did not receive a Content-Disposition".to_string());
+                    }
+
+                    let mut filename: &str = "";
+                    for kv in info.split(";") {
+                        if let Some(idx) = kv.find("=") {
+                            let (k, v) = kv.split_at(idx);
+                            if k.trim_start() == "filename" {
+                                filename = v.trim();
+                                break;
+                            }
+                        }
+                    }
+
+                    if filename == "" {
+                        return Err("Could not attribute with a filename".to_string());
+                    }
+
+                    if filename.contains("/") {
+                        return Err("Invalid filename".to_string());
+                    }
+
+                    let real_filename = self.dir.join(filename);
+
+                    self.current_file = Some(
+                        match OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(real_filename)
+                        {
+                            Ok(f) => f,
+                            _ => {
+                                return Err("Could not open file for writing.".to_string());
+                            }
+                        },
+                    );
+
+                    self.state = PostRequestState::AwaitingBody;
+                }
+                PostRequestState::AwaitingBody => {
+                    let end = match self.find_next_delim(parse_idx) {
+                        None => {
+                            // Cannot find the delimeter, so keep reading. This is good
+                            // for slow connections. If we can't find the delimeter in 4M
+                            // eventually `read` will return 0 and the connection will be
+                            // aborted.
+                            return Ok(false);
+                        }
+                        Some(idx) => idx,
+                    };
+
+                    if self.current_file.is_none() {
+                        return Err("Attempted to write to a file before opening it.".to_string());
+                    } else {
+                        if let Err(_) = self
+                            .current_file
+                            .as_ref()
+                            .unwrap()
+                            .write(&self.buffer[parse_idx..end])
+                        {
+                            return Err("Error writing to file.".to_string());
+                        }
+                        self.current_file = None;
+                    }
+
+                    return Ok(true);
+                }
+                // TODO: Test this.
+                // AwaitingMeta will only happen if Content-Disposition
+                // happens to land on a 4M boundary, very rare.
+                PostRequestState::AwaitingMeta => {
+                    panic!("AwaitingMeta not implemented");
+                }
+            }
         }
     }
 }
@@ -466,6 +606,8 @@ impl HttpTui<'_> {
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
+        let _ = self.history_channel.send(format!("read_partial_request"));
+
         let buffer = &mut conn.buffer;
         let bytes_read = match conn.stream.read(&mut buffer[conn.bytes_read..]) {
             Ok(size) => size,
@@ -487,24 +629,26 @@ impl HttpTui<'_> {
             // Once we have read the request, handle it.
             // The connection state will be updated accordingly
             self.handle_request(conn)
-        } else if bytes_read == 0 || conn.bytes_read == conn.buffer.len() {
-            if conn.bytes_read == 0 {
-                return Ok(ConnectionState::Closing);
-            }
+        } else if bytes_read == 0 {
+            return Ok(ConnectionState::Closing);
+        } else if conn.bytes_read == buffer.len() {
             if let Some(start) = find_body_start(&conn.buffer[..conn.bytes_read]) {
                 conn.body_start_location = start;
                 return self.handle_request(conn);
-            } else {
-                return self.create_oneoff_response(
-                    HttpStatus::RequestHeadersTooLarge,
-                    conn,
-                    Some(
-                        "Request headers are too long. The total size must be less than 4KB."
-                            .to_string(),
-                    ),
-                );
             }
+            return self.create_oneoff_response(
+                HttpStatus::RequestHeadersTooLarge,
+                conn,
+                Some(
+                    "Request headers are too long. The total size must be less than 4KB."
+                        .to_string(),
+                ),
+            );
         } else {
+            if let Some(start) = find_body_start(&conn.buffer[..conn.bytes_read]) {
+                conn.body_start_location = start;
+                return self.handle_request(conn);
+            }
             Ok(ConnectionState::ReadingRequest)
         }
     }
@@ -514,6 +658,8 @@ impl HttpTui<'_> {
         req: &HttpRequest,
         conn: &mut HttpConnection,
     ) -> Result<HttpResult, io::Error> {
+        let _ = self.history_channel.send(format!("handle_post"));
+
         let boundary = match get_post_boundary(req) {
             Some(b) => b,
             None => {
@@ -529,7 +675,9 @@ impl HttpTui<'_> {
                 ));
             }
         };
-        let post_delimeter = match BMByte::from(boundary) {
+
+        let real_boundary = format!("--{}", boundary);
+        let post_delimeter = match BMByte::from(real_boundary.clone()) {
             Some(bmb) => bmb,
             None => {
                 return Ok(HttpResult::Error(
@@ -542,7 +690,30 @@ impl HttpTui<'_> {
             }
         };
 
-        let mut pb = PostBuffer::new(post_delimeter);
+        let normalized_path = if req.path.starts_with("/") {
+            &req.path[1..]
+        } else {
+            &req.path[..]
+        };
+
+        let path = self.root_dir.join(normalized_path);
+
+        let canonical_path = match get_and_check_canon_path(&self.root_dir, path)? {
+            Some(path) => path,
+            None => {
+                return Ok(HttpResult::Error(
+                    HttpStatus::NotFound,
+                    Some("Path disallowed.".to_string()),
+                ));
+            }
+        };
+
+        let _ = self.history_channel.send(format!(
+            "post_buffer created with delimiter: {}",
+            &real_boundary
+        ));
+
+        let mut pb = PostBuffer::new(canonical_path, post_delimeter, real_boundary);
         pb.fill_location = conn.bytes_read - conn.body_start_location;
         &pb.buffer[..pb.fill_location]
             .clone_from_slice(&conn.buffer[conn.body_start_location..conn.bytes_read]);
@@ -559,26 +730,15 @@ impl HttpTui<'_> {
         };
 
         let path = self.root_dir.join(normalized_path);
-        let canonical_path = match fs::canonicalize(path) {
-            Err(error) => {
-                // Attempt to convert the system error into an HTTP error
-                // that we can send back to the user.
-                return match resolve_io_error(&error) {
-                    Some(http_error) => Ok(HttpResult::Error(http_error, Some(error.to_string()))),
-                    None => Err(error),
-                };
+        let canonical_path = match get_and_check_canon_path(&self.root_dir, path)? {
+            Some(path) => path,
+            None => {
+                return Ok(HttpResult::Error(
+                    HttpStatus::NotFound,
+                    Some("Path disallowed.".to_string()),
+                ));
             }
-            Ok(path) => path,
         };
-
-        if !canonical_path.starts_with(self.root_dir) {
-            // Use 404 so that the user cannot determine if directories
-            // exist or not.
-            return Ok(HttpResult::Error(
-                HttpStatus::NotFound,
-                Some("Path disallowed.".to_string()),
-            ));
-        }
 
         let metadata = match fs::metadata(&canonical_path) {
             Err(error) => {
@@ -728,7 +888,7 @@ impl HttpTui<'_> {
             None => false,
         };
 
-        let result = match req.method {
+        let maybe_result = match req.method {
             None => {
                 return self.create_oneoff_response(
                     HttpStatus::NotImplemented,
@@ -736,9 +896,20 @@ impl HttpTui<'_> {
                     Some("This server does not implement the requested HTTP method.".to_string()),
                 );
             }
-            Some(HttpMethod::GET) => self.handle_get(&req)?,
-            Some(HttpMethod::HEAD) => self.handle_get(&req)?,
-            Some(HttpMethod::POST) => self.handle_post(&req, conn)?,
+            Some(HttpMethod::GET) => self.handle_get(&req),
+            Some(HttpMethod::HEAD) => self.handle_get(&req),
+            Some(HttpMethod::POST) => self.handle_post(&req, conn),
+        };
+        let result = match maybe_result {
+            // Attempt to convert the system error into an HTTP error
+            // that we can send back to the user.
+            Ok(r) => r,
+            Err(error) => match resolve_io_error(&error) {
+                Some(http_error) => HttpResult::Error(http_error, Some(error.to_string())),
+                None => {
+                    return Err(error);
+                }
+            },
         };
 
         let (mut resp, range) = match result {
@@ -746,7 +917,7 @@ impl HttpTui<'_> {
                 return self.create_oneoff_response(http_status, conn, msg);
             }
             HttpResult::ReadRequestBody => {
-                return Ok(ConnectionState::ReadingPostBody);
+                return self.check_partial_post_body(conn);
             }
             HttpResult::Response(resp, range) => (resp, range),
         };
@@ -821,10 +992,37 @@ impl HttpTui<'_> {
         }
     }
 
+    fn check_partial_post_body(
+        &self,
+        conn: &mut HttpConnection,
+    ) -> Result<ConnectionState, io::Error> {
+        let _ = self
+            .history_channel
+            .send(format!("check_partial_post_body"));
+        let pb = &mut conn.post_buffer.as_mut().unwrap();
+        match pb.handle_new_data() {
+            Ok(done) => {
+                if done {
+                    Ok(ConnectionState::Closing)
+                } else {
+                    Ok(ConnectionState::ReadingPostBody)
+                }
+            }
+            Err(s) => {
+                return self.create_oneoff_response(
+                    HttpStatus::ServerError,
+                    conn,
+                    Some(format!("Error while parsing POST request: {}", s)),
+                );
+            }
+        }
+    }
+
     fn read_partial_post_body(
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
+        let _ = self.history_channel.send(format!("read_partial_post_body"));
         if let Some(pb) = &mut conn.post_buffer {
             let bytes_read = match conn.stream.read(&mut pb.buffer[pb.fill_location..]) {
                 Ok(size) => size,
@@ -840,16 +1038,15 @@ impl HttpTui<'_> {
 
             if bytes_read == 0 {
                 let res = self.create_oneoff_response(
-                    HttpStatus::OK,
+                    HttpStatus::BadRequest,
                     conn,
-                    Some("File received.".to_string()),
+                    Some("An error occurred while receiving your file.".to_string()),
                 );
                 let _ = self.write_conn_to_history(conn);
                 return res;
-            } else {
-                // if conn.post_buffer_fill_location == conn.post_buffer.as_ref().unwrap().len() {}
-                Ok(ConnectionState::ReadingPostBody)
             }
+
+            self.check_partial_post_body(conn)
         } else {
             return self.create_oneoff_response(
                 HttpStatus::ServerError,
@@ -863,6 +1060,9 @@ impl HttpTui<'_> {
         match conn.state {
             ConnectionState::ReadingRequest => {
                 conn.state = self.read_partial_request(conn)?;
+                let _ = self
+                    .history_channel
+                    .send(format!("read_partial_request done"));
             }
             ConnectionState::ReadingPostBody => {
                 conn.state = self.read_partial_post_body(conn)?;
@@ -920,23 +1120,40 @@ fn find_body_start(buffer: &[u8]) -> Option<usize> {
     if vec.len() < 1 {
         None
     } else {
-        Some(vec[0])
+        Some(vec[0] + 4)
     }
 }
 
 fn get_post_boundary(req: &HttpRequest) -> Option<&str> {
     let ct = req.get_header("content-type")?;
     for segment in ct.split(";") {
-        if segment.starts_with("boundary=") {
+        if segment.trim_start().starts_with("boundary=") {
             let (_, inner) = segment.split_at(segment.find("=")?);
 
             // Remove the surrounding quotes
-            if inner.starts_with("\"") {
-                return Some(&inner[1..inner.len() - 2]);
+            if inner.starts_with("=\"") {
+                return Some(&inner[2..inner.len() - 1]);
             }
 
-            return Some(inner);
+            return Some(&inner[1..]);
         }
     }
     None
+}
+
+fn get_and_check_canon_path(root_dir: &Path, path: PathBuf) -> Result<Option<PathBuf>, io::Error> {
+    let canonical_path = match fs::canonicalize(path) {
+        Err(error) => {
+            return Err(error);
+        }
+        Ok(path) => path,
+    };
+
+    if !canonical_path.starts_with(root_dir) {
+        // Use 404 so that the user cannot determine if directories
+        // exist or not.
+        return Ok(None);
+    }
+
+    Ok(Some(canonical_path))
 }

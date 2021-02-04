@@ -289,10 +289,9 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
     let table = generate_dir_table(path, relative_path);
     body.add_child(table);
 
-    /* Uncomment when ready
     let mut upload_form = HtmlElement::new("form", HtmlStyle::CanHaveChildren);
     upload_form.add_attribute("method".to_string(), "post".to_string());
-    upload_form.add_attribute("enctype".to_string(), "text/plain".to_string());
+    upload_form.add_attribute("enctype".to_string(), "multipart/form-data".to_string());
     let mut file_input = HtmlElement::new("input", HtmlStyle::NoChildren);
     file_input.add_attribute("type".to_string(), "file".to_string());
     file_input.add_attribute("name".to_string(), "data".to_string());
@@ -302,7 +301,6 @@ pub fn render_directory(relative_path: &str, path: &Path) -> String {
     upload_form.add_child(file_input);
     upload_form.add_child(submit_input);
     body.add_child(upload_form);
-    */
 
     body.add_child(generate_default_footer());
     html.add_child(body);
