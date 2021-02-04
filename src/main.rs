@@ -322,7 +322,7 @@ fn main() -> Result<(), io::Error> {
             rx,
             &needs_update_clone,
             write_end,
-            !opts.start_disabled,
+            opts,
         );
     });
 
@@ -413,12 +413,14 @@ fn display(
     rx: mpsc::Receiver<ControlEvent>,
     needs_update: &AtomicBool,
     write_end: RawFd,
-    mut enabled: bool,
+    opts: Opts,
 ) -> Result<(), io::Error> {
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    let mut enabled = !opts.start_disabled;
 
     'outer: loop {
         // Print that the connection has been established
@@ -445,7 +447,7 @@ fn display(
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Length(4),
+                            Constraint::Length(6),
                             Constraint::Min(2),
                             Constraint::Percentage(50),
                         ]
@@ -456,11 +458,27 @@ fn display(
                 let block = List::new(vec![
                     ListItem::new(vec![Spans::from(Span::raw(format!(
                         "Serving {}",
-                        root_path
+                        root_path,
                     )))]),
                     ListItem::new(vec![Spans::from(Span::raw(format!(
-                        "{}",
-                        if enabled { "Enabled" } else { "Disabled" },
+                        "Listening on {}:{}",
+                        opts.host, opts.port
+                    )))]),
+                    ListItem::new(vec![Spans::from(Span::raw(format!(
+                        "Directory listings: {}",
+                        if opts.disable_directory_listings {
+                            "Disabled"
+                        } else {
+                            "Enabled"
+                        }
+                    )))]),
+                    ListItem::new(vec![Spans::from(Span::raw(format!(
+                        "Status: {}",
+                        if enabled {
+                            "Serving requests"
+                        } else {
+                            "Rejecting requests"
+                        },
                     )))]),
                 ])
                 .block(Block::default().borders(Borders::ALL).title("Information"));
