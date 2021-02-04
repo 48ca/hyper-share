@@ -212,9 +212,9 @@ impl PostBuffer {
                             // for slow connections. If we can't find the delimeter in 4M
                             // eventually `read` will return 0 and the connection will be
                             // aborted.
-                            return Ok(true);
+                            return Ok(false);
                         }
-                        Some(idx) => idx + self.post_delimeter_string.len(),
+                        Some(idx) => idx + self.post_delimeter_string.len() + 2, // + 2 to account for following "\r\n"
                     };
 
                     let body_start =
@@ -226,18 +226,28 @@ impl PostBuffer {
                             }
                         };
 
-                    parse_idx = body_start;
-
                     let meta = &self.buffer[parse_idx..body_start];
                     let meta_str = String::from_utf8_lossy(meta).to_string();
-                    let (content_disp, info) = meta_str.split_at(match meta_str.find(":") {
-                        Some(idx) => idx,
-                        None => {
-                            return Err("Could not find ':' in Content-Disposition".to_string());
+
+                    let mut info: &str = "";
+
+                    for line in meta_str.split("\r\n") {
+                        let (head, val) = line.split_at(match meta_str.find(":") {
+                            Some(idx) => idx,
+                            None => {
+                                return Err("Could not find ':' in Content-Disposition".to_string());
+                            }
+                        });
+                        if head.to_lowercase() == "content-disposition" {
+                            info = val;
+                            break;
                         }
-                    });
-                    if content_disp.to_lowercase() != "content-disposition" {
-                        return Err("Did not receive a Content-Disposition".to_string());
+                    }
+                    if info == "" {
+                        return Err(format!(
+                            "Did not receive a Content-Disposition:\n{}",
+                            meta_str
+                        ));
                     }
 
                     let mut filename: &str = "";
@@ -245,7 +255,8 @@ impl PostBuffer {
                         if let Some(idx) = kv.find("=") {
                             let (k, v) = kv.split_at(idx);
                             if k.trim_start() == "filename" {
-                                filename = v.trim();
+                                // 1.. to discard '='
+                                filename = &v[1..].trim();
                                 break;
                             }
                         }
@@ -256,7 +267,11 @@ impl PostBuffer {
                     }
 
                     if filename.contains("/") {
-                        return Err("Invalid filename".to_string());
+                        return Err(format!("Invalid filename: {}", filename));
+                    }
+
+                    if filename.starts_with("\"") {
+                        filename = &filename[1..filename.len() - 1];
                     }
 
                     let real_filename = self.dir.join(filename);
@@ -275,6 +290,8 @@ impl PostBuffer {
                     );
 
                     self.state = PostRequestState::AwaitingBody;
+
+                    parse_idx = body_start;
                 }
                 PostRequestState::AwaitingBody => {
                     let end = match self.find_next_delim(parse_idx) {
@@ -285,7 +302,7 @@ impl PostBuffer {
                             // aborted.
                             return Ok(false);
                         }
-                        Some(idx) => idx,
+                        Some(idx) => idx - 2, // - 2 to remove the preceding "\r\n"
                     };
 
                     if self.current_file.is_none() {
@@ -606,8 +623,6 @@ impl HttpTui<'_> {
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
-        let _ = self.history_channel.send(format!("read_partial_request"));
-
         let buffer = &mut conn.buffer;
         let bytes_read = match conn.stream.read(&mut buffer[conn.bytes_read..]) {
             Ok(size) => size,
@@ -658,8 +673,6 @@ impl HttpTui<'_> {
         req: &HttpRequest,
         conn: &mut HttpConnection,
     ) -> Result<HttpResult, io::Error> {
-        let _ = self.history_channel.send(format!("handle_post"));
-
         let boundary = match get_post_boundary(req) {
             Some(b) => b,
             None => {
@@ -707,11 +720,6 @@ impl HttpTui<'_> {
                 ));
             }
         };
-
-        let _ = self.history_channel.send(format!(
-            "post_buffer created with delimiter: {}",
-            &real_boundary
-        ));
 
         let mut pb = PostBuffer::new(canonical_path, post_delimeter, real_boundary);
         pb.fill_location = conn.bytes_read - conn.body_start_location;
@@ -996,14 +1004,15 @@ impl HttpTui<'_> {
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
-        let _ = self
-            .history_channel
-            .send(format!("check_partial_post_body"));
         let pb = &mut conn.post_buffer.as_mut().unwrap();
         match pb.handle_new_data() {
             Ok(done) => {
                 if done {
-                    Ok(ConnectionState::Closing)
+                    return self.create_oneoff_response(
+                        HttpStatus::OK,
+                        conn,
+                        Some(format!("File successfully uploaded")),
+                    );
                 } else {
                     Ok(ConnectionState::ReadingPostBody)
                 }
@@ -1022,7 +1031,6 @@ impl HttpTui<'_> {
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
-        let _ = self.history_channel.send(format!("read_partial_post_body"));
         if let Some(pb) = &mut conn.post_buffer {
             let bytes_read = match conn.stream.read(&mut pb.buffer[pb.fill_location..]) {
                 Ok(size) => size,
@@ -1060,9 +1068,6 @@ impl HttpTui<'_> {
         match conn.state {
             ConnectionState::ReadingRequest => {
                 conn.state = self.read_partial_request(conn)?;
-                let _ = self
-                    .history_channel
-                    .send(format!("read_partial_request done"));
             }
             ConnectionState::ReadingPostBody => {
                 conn.state = self.read_partial_post_body(conn)?;
