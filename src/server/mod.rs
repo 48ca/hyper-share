@@ -5,6 +5,8 @@ use nix::unistd;
 
 use std::fs::OpenOptions;
 
+use std::ptr::copy;
+
 use std::path::PathBuf;
 
 use std::net::SocketAddr;
@@ -175,6 +177,7 @@ pub struct PostBuffer {
     pub current_file: Option<fs::File>,
     pub state: PostRequestState,
     pub dir: PathBuf,
+    pub parse_idx: usize,
 }
 
 impl PostBuffer {
@@ -187,6 +190,7 @@ impl PostBuffer {
             current_file: None,
             state: PostRequestState::AwaitingFirstBody,
             dir: dir,
+            parse_idx: 0,
         }
     }
 
@@ -201,12 +205,61 @@ impl PostBuffer {
         }
     }
 
+    fn send_buffer_data_to_file(&mut self, limit: usize) -> Result<(), String> {
+        if self.current_file.is_none() {
+            return Err("Attempted to write to a file before opening it.".to_string());
+        }
+
+        if limit < self.post_delimeter_string.len() {
+            return Err("Not enough data to write anything.".to_string());
+        }
+        let real_limit: usize = limit - self.post_delimeter_string.len();
+        let written = match self
+            .current_file
+            .as_ref()
+            .unwrap()
+            .write(&self.buffer[self.parse_idx..real_limit])
+        {
+            Ok(size) => size,
+            Err(_) => {
+                return Err("Error writing to file.".to_string());
+            }
+        };
+
+        self.parse_idx += written;
+
+        let amount_remaining: usize = self.fill_location - self.parse_idx;
+
+        unsafe {
+            // Shuffle
+            if amount_remaining > self.parse_idx {
+                panic!("About to do a ptr::copy call on aliased memory locations.");
+            }
+            copy(
+                &self.buffer[self.parse_idx..].as_ptr(),
+                &mut self.buffer[..].as_ptr(),
+                amount_remaining,
+            );
+
+            /*
+            // A safe version (if this copy could never alias) would be:
+            &self.buffer[..amount_remaining]
+                .clone_from_slice(&self.buffer[self.parse_idx..self.fill_location]);
+            */
+        }
+
+        self.parse_idx = 0;
+        self.fill_location = amount_remaining;
+
+        Ok(())
+    }
+
     pub fn handle_new_data(&mut self) -> Result<bool, String> {
-        let mut parse_idx: usize = 0;
+        // Where parsing should begin
         loop {
             match self.state {
                 PostRequestState::AwaitingFirstBody => {
-                    parse_idx = match self.find_next_delim(parse_idx) {
+                    self.parse_idx = match self.find_next_delim(self.parse_idx) {
                         None => {
                             // Cannot find the delimeter, so keep reading. This is good
                             // for slow connections. If we can't find the delimeter in 4M
@@ -218,15 +271,15 @@ impl PostBuffer {
                     };
 
                     let body_start =
-                        match find_body_start(&self.buffer[parse_idx..self.fill_location]) {
-                            Some(idx) => idx + parse_idx,
+                        match find_body_start(&self.buffer[self.parse_idx..self.fill_location]) {
+                            Some(idx) => idx + self.parse_idx,
                             None => {
                                 self.state = PostRequestState::AwaitingMeta;
                                 return Ok(false);
                             }
                         };
 
-                    let meta = &self.buffer[parse_idx..body_start];
+                    let meta = &self.buffer[self.parse_idx..body_start];
                     let meta_str = String::from_utf8_lossy(meta).to_string();
 
                     let mut info: &str = "";
@@ -291,33 +344,18 @@ impl PostBuffer {
 
                     self.state = PostRequestState::AwaitingBody;
 
-                    parse_idx = body_start;
+                    self.parse_idx = body_start;
                 }
                 PostRequestState::AwaitingBody => {
-                    let end = match self.find_next_delim(parse_idx) {
+                    let end = match self.find_next_delim(self.parse_idx) {
                         None => {
-                            // Cannot find the delimeter, so keep reading. This is good
-                            // for slow connections. If we can't find the delimeter in 4M
-                            // eventually `read` will return 0 and the connection will be
-                            // aborted.
+                            self.send_buffer_data_to_file(self.fill_location)?;
                             return Ok(false);
                         }
                         Some(idx) => idx - 2, // - 2 to remove the preceding "\r\n"
                     };
 
-                    if self.current_file.is_none() {
-                        return Err("Attempted to write to a file before opening it.".to_string());
-                    } else {
-                        if let Err(_) = self
-                            .current_file
-                            .as_ref()
-                            .unwrap()
-                            .write(&self.buffer[parse_idx..end])
-                        {
-                            return Err("Error writing to file.".to_string());
-                        }
-                        self.current_file = None;
-                    }
+                    // self.write_to_file(self.parse_idx);
 
                     return Ok(true);
                 }
