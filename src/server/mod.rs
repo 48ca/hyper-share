@@ -30,6 +30,10 @@ use std::path::Path;
 use http_core::types::{ResponseDataType, SeekableString};
 use http_core::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion};
 
+extern crate boyer_moore_magiclen;
+
+use boyer_moore_magiclen::BMByte;
+
 const BUFFER_SIZE: usize = 4096;
 
 fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
@@ -126,6 +130,7 @@ fn end_of_http_request(req_body: &[u8]) -> bool {
 #[derive(PartialEq, Debug)]
 pub enum ConnectionState {
     ReadingRequest,
+    ReadingPostBody,
     WritingResponse,
     Closing,
 }
@@ -137,6 +142,7 @@ pub struct HttpConnection {
     // Buffer for holding a pending request
     pub buffer: [u8; BUFFER_SIZE],
     pub bytes_read: usize,
+    pub body_start_location: usize,
 
     // Space to store a per-request string response
     pub response: Option<HttpResponse>,
@@ -158,6 +164,7 @@ impl HttpConnection {
             state: ConnectionState::ReadingRequest,
             buffer: [0; BUFFER_SIZE],
             bytes_read: 0,
+            body_start_location: 0,
             response: None,
             keep_alive: true,
             bytes_requested: 0,
@@ -177,6 +184,7 @@ impl HttpConnection {
 enum HttpResult {
     Response(HttpResponse, usize),
     Error(HttpStatus, Option<String>),
+    ReadRequestBody,
 }
 
 pub struct HttpTui<'a> {
@@ -228,6 +236,9 @@ impl HttpTui<'_> {
                         w_fds.insert(*fd);
                     }
                     ConnectionState::ReadingRequest => {
+                        r_fds.insert(*fd);
+                    }
+                    ConnectionState::ReadingPostBody => {
                         r_fds.insert(*fd);
                     }
                     _ => {}
@@ -289,7 +300,6 @@ impl HttpTui<'_> {
                             // as we don't know if there is any data for us to read yet.
                             continue;
                         }
-                        assert_eq!(connections[&fd].state, ConnectionState::ReadingRequest);
                         // TODO: Error checking here
                         let mut conn = connections.get_mut(&fd).unwrap();
                         match self.handle_conn_sigpipe(&mut conn) {
@@ -356,6 +366,59 @@ impl HttpTui<'_> {
         }
     }
 
+    fn write_conn_to_history(&self, conn: &mut HttpConnection) {
+        if let Ok(peer_addr) = conn.stream.peer_addr() {
+            let ip_str = match peer_addr {
+                SocketAddr::V4(addr) => format!("{}:{}", addr.ip(), addr.port()),
+                SocketAddr::V6(addr) => format!("[{}]:{}", addr.ip(), addr.port()),
+            };
+            let code_str = match &conn.response {
+                Some(resp) => resp.get_code(),
+                None => "   ".to_string(),
+            };
+            let path_str = match &conn.last_requested_uri {
+                Some(path) => path,
+                None => "[No path...]",
+            };
+            let method_str = match &conn.last_requested_method {
+                Some(HttpMethod::GET) => "GET",
+                Some(HttpMethod::HEAD) => "HEAD",
+                Some(HttpMethod::POST) => "POST",
+                None => "???",
+            };
+            let _ = self.history_channel.send(format!(
+                "{:<22} {} {:<4} {}",
+                ip_str, code_str, method_str, path_str
+            ));
+        }
+    }
+
+    fn handle_request(&self, conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
+        let res = self.parse_and_service_request(conn);
+        self.write_conn_to_history(conn);
+
+        let state = match res {
+            Ok(state) => state,
+            Err(error) => {
+                match self.create_oneoff_response(
+                    HttpStatus::ServerError,
+                    conn,
+                    Some(error.to_string()),
+                ) {
+                    Ok(state) => state,
+                    Err(e) => return Err(e),
+                }
+            }
+        };
+
+        if state == ConnectionState::WritingResponse {
+            // Force an initial write of the data
+            self.write_partial_response(conn)
+        } else {
+            Ok(state)
+        }
+    }
+
     fn read_partial_request(
         &self,
         conn: &mut HttpConnection,
@@ -376,57 +439,34 @@ impl HttpTui<'_> {
         };
 
         conn.bytes_read += bytes_read;
-        if bytes_read == 0 || end_of_http_request(&buffer[..conn.bytes_read]) {
+        if end_of_http_request(&buffer[..conn.bytes_read]) {
+            conn.body_start_location = conn.bytes_read;
+            // Once we have read the request, handle it.
+            // The connection state will be updated accordingly
+            self.handle_request(conn)
+        } else if bytes_read == 0 || conn.bytes_read == conn.buffer.len() {
             if conn.bytes_read == 0 {
                 return Ok(ConnectionState::Closing);
             }
-            // Once we have read the request, handle it.
-            // The connection state will be updated accordingly
-            let res = self.handle_request(conn);
-            if let Ok(peer_addr) = conn.stream.peer_addr() {
-                let ip_str = match peer_addr {
-                    SocketAddr::V4(addr) => format!("{}:{}", addr.ip(), addr.port()),
-                    SocketAddr::V6(addr) => format!("[{}]:{}", addr.ip(), addr.port()),
-                };
-                let code_str = match &conn.response {
-                    Some(resp) => resp.get_code(),
-                    None => "???".to_string(),
-                };
-                let path_str = match &conn.last_requested_uri {
-                    Some(path) => path,
-                    None => "[No path...]",
-                };
-                let method_str = match &conn.last_requested_method {
-                    Some(HttpMethod::GET) => "GET",
-                    Some(HttpMethod::HEAD) => "HEAD",
-                    Some(HttpMethod::POST) => "POST",
-                    None => "???",
-                };
-                let _ = self.history_channel.send(format!(
-                    "{:<22} {} {:<4} {}",
-                    ip_str, code_str, method_str, path_str
-                ));
-            }
-
-            let state = match res {
-                Ok(state) => state,
-                Err(error) => {
-                    match self.create_error_response(
+            if let Some(start) = find_body_start(&mut conn.buffer) {
+                if start > conn.bytes_read {
+                    return self.create_oneoff_response(
                         HttpStatus::ServerError,
                         conn,
-                        Some(error.to_string()),
-                    ) {
-                        Ok(state) => state,
-                        Err(e) => return Err(e),
-                    }
+                        Some("Failed to parse header".to_string()),
+                    );
                 }
-            };
-
-            if state == ConnectionState::WritingResponse {
-                // Force an initial write of the data
-                self.write_partial_response(conn)
+                conn.body_start_location = start;
+                return self.handle_request(conn);
             } else {
-                Ok(state)
+                return self.create_oneoff_response(
+                    HttpStatus::RequestHeadersTooLarge,
+                    conn,
+                    Some(
+                        "Request headers are too long. The total size must be less than 4KB."
+                            .to_string(),
+                    ),
+                );
             }
         } else {
             Ok(ConnectionState::ReadingRequest)
@@ -434,8 +474,7 @@ impl HttpTui<'_> {
     }
 
     fn handle_post(&self, req: &HttpRequest) -> Result<HttpResult, io::Error> {
-        let resp = HttpResponse::new(HttpStatus::OK, &req.version);
-        Ok(HttpResult::Response(resp, 0))
+        Ok(HttpResult::ReadRequestBody)
     }
 
     fn handle_get(&self, req: &HttpRequest) -> Result<HttpResult, io::Error> {
@@ -579,15 +618,18 @@ impl HttpTui<'_> {
         Ok(HttpResult::Response(resp, range))
     }
 
-    fn handle_request(&self, mut conn: &mut HttpConnection) -> Result<ConnectionState, io::Error> {
-        let body = &mut conn.buffer[..conn.bytes_read];
+    fn parse_and_service_request(
+        &self,
+        mut conn: &mut HttpConnection,
+    ) -> Result<ConnectionState, io::Error> {
+        let head = &mut conn.buffer[..conn.body_start_location];
 
-        let req: HttpRequest = match decode_request(body) {
+        let req: HttpRequest = match decode_request(head) {
             Ok(r) => r,
             Err(status) => {
                 // Kill the connection if we get invalid data
                 conn.keep_alive = false;
-                return self.create_error_response(
+                return self.create_oneoff_response(
                     status,
                     conn,
                     Some("Could not decode request.".to_string()),
@@ -601,7 +643,7 @@ impl HttpTui<'_> {
 
         if self.disabled {
             conn.keep_alive = false;
-            return self.create_error_response(HttpStatus::ServiceUnavailable,
+            return self.create_oneoff_response(HttpStatus::ServiceUnavailable,
                                               conn, Some("This server has been temporarily disabled. Please contact the administrator to re-enable it.".to_string()));
         }
 
@@ -614,7 +656,7 @@ impl HttpTui<'_> {
 
         let result = match req.method {
             None => {
-                return self.create_error_response(
+                return self.create_oneoff_response(
                     HttpStatus::NotImplemented,
                     conn,
                     Some("This server does not implement the requested HTTP method.".to_string()),
@@ -627,7 +669,10 @@ impl HttpTui<'_> {
 
         let (mut resp, range) = match result {
             HttpResult::Error(http_status, msg) => {
-                return self.create_error_response(http_status, conn, msg);
+                return self.create_oneoff_response(http_status, conn, msg);
+            }
+            HttpResult::ReadRequestBody => {
+                return Ok(ConnectionState::ReadingPostBody);
             }
             HttpResult::Response(resp, range) => (resp, range),
         };
@@ -702,10 +747,25 @@ impl HttpTui<'_> {
         }
     }
 
+    fn read_partial_post_body(
+        &self,
+        conn: &mut HttpConnection,
+    ) -> Result<ConnectionState, io::Error> {
+        // Ok(ConnectionState::ReadingPostBody)
+        // TODO: Move this
+        let res =
+            self.create_oneoff_response(HttpStatus::OK, conn, Some("File uploaded.".to_string()));
+        let _ = self.write_conn_to_history(conn);
+        res
+    }
+
     fn handle_conn(&self, conn: &mut HttpConnection) -> Result<(), io::Error> {
         match conn.state {
             ConnectionState::ReadingRequest => {
                 conn.state = self.read_partial_request(conn)?;
+            }
+            ConnectionState::ReadingPostBody => {
+                conn.state = self.read_partial_post_body(conn)?;
             }
             ConnectionState::WritingResponse => {
                 conn.state = self.write_partial_response(conn)?;
@@ -716,7 +776,7 @@ impl HttpTui<'_> {
         Ok(())
     }
 
-    fn create_error_response(
+    fn create_oneoff_response(
         &self,
         status: HttpStatus,
         mut conn: &mut HttpConnection,
@@ -748,5 +808,21 @@ impl HttpTui<'_> {
         conn.response = Some(resp);
 
         Ok(ConnectionState::WritingResponse)
+    }
+}
+
+fn find_body_start(buffer: &mut [u8; BUFFER_SIZE]) -> Option<usize> {
+    lazy_static! {
+        static ref BODY_DELIM: BMByte = BMByte::from("\r\n\r\n").unwrap();
+    };
+
+    let vec = BODY_DELIM.find_in(
+        unsafe { Vec::from_raw_parts(buffer.as_mut_ptr(), BUFFER_SIZE, BUFFER_SIZE) },
+        1,
+    );
+    if vec.len() < 1 {
+        None
+    } else {
+        Some(vec[0])
     }
 }
