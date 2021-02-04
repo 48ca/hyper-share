@@ -32,9 +32,12 @@ use http_core::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion};
 
 extern crate boyer_moore_magiclen;
 
-use boyer_moore_magiclen::BMByte;
+use core::slice::Iter;
+
+use boyer_moore_magiclen::{BMByte, BMByteSearchable};
 
 const BUFFER_SIZE: usize = 4096;
+const POST_BUFFER_SIZE: usize = 4096 * 1024;
 
 fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
     match error.kind() {
@@ -127,6 +130,25 @@ fn end_of_http_request(req_body: &[u8]) -> bool {
     return &req_body[req_body.len() - 4..] == b"\r\n\r\n";
 }
 
+struct BMBuf<'a>(&'a [u8]);
+
+impl BMByteSearchable for BMBuf<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    fn value_at(&self, index: usize) -> u8 {
+        self.0[index]
+    }
+
+    #[inline]
+    fn iter(&self) -> Iter<u8> {
+        self.0.iter()
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub enum ConnectionState {
     ReadingRequest,
@@ -140,9 +162,13 @@ pub struct HttpConnection {
     pub state: ConnectionState,
 
     // Buffer for holding a pending request
-    pub buffer: [u8; BUFFER_SIZE],
+    pub buffer: Box<[u8; BUFFER_SIZE]>,
     pub bytes_read: usize,
     pub body_start_location: usize,
+
+    pub post_buffer_fill_location: usize,
+    pub post_buffer: Option<Box<[u8; POST_BUFFER_SIZE]>>,
+    pub post_delimeter: Option<BMByte>,
 
     // Space to store a per-request string response
     pub response: Option<HttpResponse>,
@@ -162,9 +188,12 @@ impl HttpConnection {
         return HttpConnection {
             stream: stream,
             state: ConnectionState::ReadingRequest,
-            buffer: [0; BUFFER_SIZE],
+            buffer: Box::new([0; BUFFER_SIZE]),
             bytes_read: 0,
             body_start_location: 0,
+            post_buffer_fill_location: 0,
+            post_buffer: None,
+            post_delimeter: None,
             response: None,
             keep_alive: true,
             bytes_requested: 0,
@@ -448,14 +477,7 @@ impl HttpTui<'_> {
             if conn.bytes_read == 0 {
                 return Ok(ConnectionState::Closing);
             }
-            if let Some(start) = find_body_start(&mut conn.buffer) {
-                if start > conn.bytes_read {
-                    return self.create_oneoff_response(
-                        HttpStatus::ServerError,
-                        conn,
-                        Some("Failed to parse header".to_string()),
-                    );
-                }
+            if let Some(start) = find_body_start(&conn.buffer[..conn.bytes_read]) {
                 conn.body_start_location = start;
                 return self.handle_request(conn);
             } else {
@@ -473,7 +495,42 @@ impl HttpTui<'_> {
         }
     }
 
-    fn handle_post(&self, req: &HttpRequest) -> Result<HttpResult, io::Error> {
+    fn handle_post(
+        &self,
+        req: &HttpRequest,
+        conn: &mut HttpConnection,
+    ) -> Result<HttpResult, io::Error> {
+        conn.post_buffer = Some(Box::new([0; POST_BUFFER_SIZE]));
+        conn.post_buffer_fill_location = conn.bytes_read - conn.body_start_location;
+        &conn.post_buffer.as_mut().unwrap()[..conn.post_buffer_fill_location]
+            .clone_from_slice(&conn.buffer[conn.body_start_location..conn.bytes_read]);
+        let boundary = match get_post_boundary(req) {
+            Some(b) => b,
+            None => {
+                return Ok(HttpResult::Error(
+                    HttpStatus::BadRequest,
+                    Some(format!(
+                        "Failed to find or parse boundary: {}",
+                        match req.get_header("content-type") {
+                            Some(ct) => ct,
+                            None => "[ Missing ]",
+                        }
+                    )),
+                ));
+            }
+        };
+        conn.post_delimeter = Some(match BMByte::from(boundary) {
+            Some(bmb) => bmb,
+            None => {
+                return Ok(HttpResult::Error(
+                    HttpStatus::ServerError,
+                    Some(format!(
+                        "Could not create Boyer-Moore delimeter for the given boundary: {}",
+                        boundary
+                    )),
+                ));
+            }
+        });
         Ok(HttpResult::ReadRequestBody)
     }
 
@@ -664,7 +721,7 @@ impl HttpTui<'_> {
             }
             Some(HttpMethod::GET) => self.handle_get(&req)?,
             Some(HttpMethod::HEAD) => self.handle_get(&req)?,
-            Some(HttpMethod::POST) => self.handle_post(&req)?,
+            Some(HttpMethod::POST) => self.handle_post(&req, conn)?,
         };
 
         let (mut resp, range) = match result {
@@ -751,12 +808,33 @@ impl HttpTui<'_> {
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
-        // Ok(ConnectionState::ReadingPostBody)
-        // TODO: Move this
-        let res =
-            self.create_oneoff_response(HttpStatus::OK, conn, Some("File uploaded.".to_string()));
-        let _ = self.write_conn_to_history(conn);
-        res
+        let bytes_read = match conn
+            .stream
+            .read(&mut conn.post_buffer.as_mut().unwrap()[conn.post_buffer_fill_location..])
+        {
+            Ok(size) => size,
+            Err(_err) => {
+                // Even though the server has run into a problem, because it is
+                // a problem inherent to the socket connection, we return Ok
+                // so that we do not write an HTTP error response to the socket.
+                return Ok(ConnectionState::Closing);
+            }
+        };
+        conn.bytes_read += bytes_read;
+        conn.post_buffer_fill_location += bytes_read;
+
+        if bytes_read == 0 {
+            let res = self.create_oneoff_response(
+                HttpStatus::OK,
+                conn,
+                Some("File received.".to_string()),
+            );
+            let _ = self.write_conn_to_history(conn);
+            return res;
+        } else {
+            if conn.post_buffer_fill_location == conn.post_buffer.as_ref().unwrap().len() {}
+            Ok(ConnectionState::ReadingPostBody)
+        }
     }
 
     fn handle_conn(&self, conn: &mut HttpConnection) -> Result<(), io::Error> {
@@ -811,18 +889,32 @@ impl HttpTui<'_> {
     }
 }
 
-fn find_body_start(buffer: &mut [u8; BUFFER_SIZE]) -> Option<usize> {
+fn find_body_start(buffer: &[u8]) -> Option<usize> {
     lazy_static! {
         static ref BODY_DELIM: BMByte = BMByte::from("\r\n\r\n").unwrap();
     };
 
-    let vec = BODY_DELIM.find_in(
-        unsafe { Vec::from_raw_parts(buffer.as_mut_ptr(), BUFFER_SIZE, BUFFER_SIZE) },
-        1,
-    );
+    let vec = BODY_DELIM.find_in(BMBuf(buffer), 1);
     if vec.len() < 1 {
         None
     } else {
         Some(vec[0])
     }
+}
+
+fn get_post_boundary(req: &HttpRequest) -> Option<&str> {
+    let ct = req.get_header("content-type")?;
+    for segment in ct.split(";") {
+        if segment.starts_with("boundary=") {
+            let (_, inner) = segment.split_at(segment.find("=")?);
+
+            // Remove the surrounding quotes
+            if inner.starts_with("\"") {
+                return Some(&inner[1..inner.len() - 2]);
+            }
+
+            return Some(inner);
+        }
+    }
+    None
 }

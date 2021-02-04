@@ -77,6 +77,7 @@ struct Connection {
     addr: SocketAddr,
     bytes_sent: usize,
     bytes_requested: usize,
+    bytes_read: usize,
     prev_bytes_sent: usize,
     update_time: time::Instant,
     prev_update_time: time::Instant,
@@ -90,8 +91,9 @@ impl Connection {
         Connection {
             addr: addr,
             bytes_sent: 0,
-            prev_bytes_sent: 0,
             bytes_requested: 0,
+            bytes_read: 0,
+            prev_bytes_sent: 0,
             update_time: time::Instant::now(),
             prev_update_time: time::Instant::now(),
             avg_speed: ConnectionSpeedMeasurement::new(),
@@ -103,6 +105,7 @@ impl Connection {
     pub fn update(&mut self, conn: &HttpConnection) -> bool {
         self.bytes_sent = conn.bytes_sent;
         self.bytes_requested = conn.bytes_requested;
+        self.bytes_read = conn.bytes_read;
         if let Some(uri) = &conn.last_requested_uri {
             if self.num_requests < conn.num_requests {
                 self.last_requested_uri = uri.clone();
@@ -393,13 +396,14 @@ fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
         }
     };
     let info_str = format!(
-        " {uri} #{num} => {sent}/{reqd}\t ({perc}% {speed} MiB/s)",
+        " {uri} #{num} => Down: {sent}/{reqd}\t ({perc}% {speed} MiB/s) Up: {upsent}",
         uri = conn.last_requested_uri,
         num = conn.num_requests,
         sent = conn.bytes_sent,
         reqd = conn.bytes_requested,
         perc = perc,
-        speed = speed / (1024. * 1024.)
+        speed = speed / (1024. * 1024.),
+        upsent = conn.bytes_read,
     );
 
     ip_str.push_str(&info_str);
