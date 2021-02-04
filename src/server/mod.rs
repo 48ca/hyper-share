@@ -157,6 +157,24 @@ pub enum ConnectionState {
     Closing,
 }
 
+pub struct PostBuffer {
+    pub fill_location: usize,
+    pub buffer: Box<[u8; POST_BUFFER_SIZE]>,
+    pub post_delimeter: BMByte,
+    pub current_file: Option<fs::File>,
+}
+
+impl PostBuffer {
+    pub fn new(delim: BMByte) -> PostBuffer {
+        PostBuffer {
+            buffer: Box::new([0; POST_BUFFER_SIZE]),
+            fill_location: 0,
+            post_delimeter: delim,
+            current_file: None,
+        }
+    }
+}
+
 pub struct HttpConnection {
     pub stream: TcpStream,
     pub state: ConnectionState,
@@ -166,9 +184,7 @@ pub struct HttpConnection {
     pub bytes_read: usize,
     pub body_start_location: usize,
 
-    pub post_buffer_fill_location: usize,
-    pub post_buffer: Option<Box<[u8; POST_BUFFER_SIZE]>>,
-    pub post_delimeter: Option<BMByte>,
+    pub post_buffer: Option<PostBuffer>,
 
     // Space to store a per-request string response
     pub response: Option<HttpResponse>,
@@ -191,9 +207,7 @@ impl HttpConnection {
             buffer: Box::new([0; BUFFER_SIZE]),
             bytes_read: 0,
             body_start_location: 0,
-            post_buffer_fill_location: 0,
             post_buffer: None,
-            post_delimeter: None,
             response: None,
             keep_alive: true,
             bytes_requested: 0,
@@ -500,10 +514,6 @@ impl HttpTui<'_> {
         req: &HttpRequest,
         conn: &mut HttpConnection,
     ) -> Result<HttpResult, io::Error> {
-        conn.post_buffer = Some(Box::new([0; POST_BUFFER_SIZE]));
-        conn.post_buffer_fill_location = conn.bytes_read - conn.body_start_location;
-        &conn.post_buffer.as_mut().unwrap()[..conn.post_buffer_fill_location]
-            .clone_from_slice(&conn.buffer[conn.body_start_location..conn.bytes_read]);
         let boundary = match get_post_boundary(req) {
             Some(b) => b,
             None => {
@@ -519,7 +529,7 @@ impl HttpTui<'_> {
                 ));
             }
         };
-        conn.post_delimeter = Some(match BMByte::from(boundary) {
+        let post_delimeter = match BMByte::from(boundary) {
             Some(bmb) => bmb,
             None => {
                 return Ok(HttpResult::Error(
@@ -530,7 +540,14 @@ impl HttpTui<'_> {
                     )),
                 ));
             }
-        });
+        };
+
+        let mut pb = PostBuffer::new(post_delimeter);
+        pb.fill_location = conn.bytes_read - conn.body_start_location;
+        &pb.buffer[..pb.fill_location]
+            .clone_from_slice(&conn.buffer[conn.body_start_location..conn.bytes_read]);
+
+        conn.post_buffer = Some(pb);
         Ok(HttpResult::ReadRequestBody)
     }
 
@@ -808,32 +825,37 @@ impl HttpTui<'_> {
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
-        let bytes_read = match conn
-            .stream
-            .read(&mut conn.post_buffer.as_mut().unwrap()[conn.post_buffer_fill_location..])
-        {
-            Ok(size) => size,
-            Err(_err) => {
-                // Even though the server has run into a problem, because it is
-                // a problem inherent to the socket connection, we return Ok
-                // so that we do not write an HTTP error response to the socket.
-                return Ok(ConnectionState::Closing);
-            }
-        };
-        conn.bytes_read += bytes_read;
-        conn.post_buffer_fill_location += bytes_read;
+        if let Some(pb) = &mut conn.post_buffer {
+            let bytes_read = match conn.stream.read(&mut pb.buffer[pb.fill_location..]) {
+                Ok(size) => size,
+                Err(_err) => {
+                    // Even though the server has run into a problem, because it is
+                    // a problem inherent to the socket connection, we return Ok
+                    // so that we do not write an HTTP error response to the socket.
+                    return Ok(ConnectionState::Closing);
+                }
+            };
+            conn.bytes_read += bytes_read;
+            pb.fill_location += bytes_read;
 
-        if bytes_read == 0 {
-            let res = self.create_oneoff_response(
-                HttpStatus::OK,
-                conn,
-                Some("File received.".to_string()),
-            );
-            let _ = self.write_conn_to_history(conn);
-            return res;
+            if bytes_read == 0 {
+                let res = self.create_oneoff_response(
+                    HttpStatus::OK,
+                    conn,
+                    Some("File received.".to_string()),
+                );
+                let _ = self.write_conn_to_history(conn);
+                return res;
+            } else {
+                // if conn.post_buffer_fill_location == conn.post_buffer.as_ref().unwrap().len() {}
+                Ok(ConnectionState::ReadingPostBody)
+            }
         } else {
-            if conn.post_buffer_fill_location == conn.post_buffer.as_ref().unwrap().len() {}
-            Ok(ConnectionState::ReadingPostBody)
+            return self.create_oneoff_response(
+                HttpStatus::ServerError,
+                conn,
+                Some("Attempt to read POST contents without a buffer.".to_string()),
+            );
         }
     }
 
