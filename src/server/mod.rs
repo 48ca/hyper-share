@@ -989,7 +989,7 @@ impl HttpTui<'_> {
             } else {
                 HttpStatus::OK
             },
-            &HttpVersion::Http1_1,
+            &req.version,
         );
 
         resp.add_header("Server".to_string(), "hypershare".to_string());

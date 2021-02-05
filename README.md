@@ -1,14 +1,14 @@
 # HyperShare
 
-Kind of like OnionShare but for normal people.
+Kind of like OnionShare but for normal people: an interactive HTTP server that can both serve and accept files.
 
-An interactive HTTP server that can both serve and accept files.
+It has been designed to be used with a JS-less web browser.
 
 ## Why?
 
 So you want to send a file to someone, but you can't or don't want to put the file on a cloud storage system. You could use nginx, SimpleHTTPServer, or some other HTTP, SSH, or FTP server, but most of your choices are either too large, too complicated, or don't implement enough of their respective protocol to be useful. Also, basically NONE of them gives you the option to inspect connections as they are served.
 
-That is why I wrote this. HyperShare is a reasonably fast, single-threaded HTTP server designed for low-volume, high-bandwidth activity. It's key feature is that connections and download progress can be observed.
+That is why I wrote this. HyperShare is a reasonably fast, single-threaded HTTP server designed for low-volume, high-bandwidth activity. Its key feature is that connections and download progress can be observed.
 
 ## Usage and Controls
 
