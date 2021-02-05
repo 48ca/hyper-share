@@ -44,6 +44,8 @@ struct Opts {
     port: u16,
     #[clap(short, long, default_value = "127.0.0.1")]
     host: String,
+    #[clap(short, long = "upload", about = "Enable uploading capabilities.")]
+    uploading_enabled: bool,
     #[clap(long = "nodirs", about = "Disable directory listings.")]
     disable_directory_listings: bool,
     #[clap(
@@ -303,6 +305,7 @@ fn main() -> Result<(), io::Error> {
         hist_tx,
         !opts.disable_directory_listings,
         opts.start_disabled,
+        opts.uploading_enabled,
     ) {
         Ok(tui) => tui,
         Err(e) => {
@@ -461,7 +464,7 @@ fn display(
                     .margin(1)
                     .constraints(
                         [
-                            Constraint::Length(6),
+                            Constraint::Length(7),
                             Constraint::Min(2),
                             Constraint::Percentage(50),
                         ]
@@ -485,6 +488,14 @@ fn display(
                         } else {
                             "Enabled"
                         }
+                    )))]),
+                    ListItem::new(vec![Spans::from(Span::raw(format!(
+                        "Uploading: {}",
+                        if opts.uploading_enabled {
+                            "Enabled"
+                        } else {
+                            "Disabled"
+                        },
                     )))]),
                     ListItem::new(vec![Spans::from(Span::raw(format!(
                         "Status: {}",

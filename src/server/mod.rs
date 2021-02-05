@@ -43,7 +43,7 @@ use core::slice::Iter;
 use boyer_moore_magiclen::{BMByte, BMByteSearchable};
 
 const BUFFER_SIZE: usize = 4096;
-const POST_BUFFER_SIZE: usize = 4096 * 1024;
+const POST_BUFFER_SIZE: usize = 16 * 1024 * 1024;
 
 fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
     match error.kind() {
@@ -469,6 +469,7 @@ pub struct HttpTui<'a> {
     history_channel: mpsc::Sender<String>,
     dir_listings: bool,
     disabled: bool,
+    uploading: bool,
 }
 
 impl HttpTui<'_> {
@@ -479,6 +480,7 @@ impl HttpTui<'_> {
         sender: mpsc::Sender<String>,
         dir_listings: bool,
         disabled: bool,
+        uploading: bool,
     ) -> Result<HttpTui<'a>, io::Error> {
         let listener = TcpListener::bind(format!("{mask}:{port}", mask = host, port = port))?;
         Ok(HttpTui {
@@ -487,6 +489,7 @@ impl HttpTui<'_> {
             history_channel: sender,
             dir_listings: dir_listings,
             disabled: disabled,
+            uploading: uploading,
         })
     }
 
@@ -749,6 +752,13 @@ impl HttpTui<'_> {
         req: &HttpRequest,
         conn: &mut HttpConnection,
     ) -> Result<HttpResult, io::Error> {
+        if !self.uploading {
+            return Ok(HttpResult::Error(
+                HttpStatus::NotImplemented,
+                Some(format!("This server does not accept POST requests.")),
+            ));
+        }
+
         let boundary = match get_post_boundary(req) {
             Some(b) => b,
             None => {
@@ -849,7 +859,11 @@ impl HttpTui<'_> {
         }
 
         let (mut response_data, full_length, mime) = if metadata.is_dir() {
-            let s: String = rendering::render_directory(normalized_path, canonical_path.as_path());
+            let s: String = rendering::render_directory(
+                normalized_path,
+                canonical_path.as_path(),
+                self.uploading,
+            );
             let len = s.len();
             let data = ResponseDataType::String(SeekableString::new(s));
             (data, len, Some("text/html"))
