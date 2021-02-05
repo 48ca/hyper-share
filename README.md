@@ -2,7 +2,7 @@
 
 Kind of like OnionShare but for normal people: an interactive HTTP server that can both serve and accept files.
 
-It has been designed to be used with a JS-less web browser.
+It has been designed to be used with basically any web browser. Users don't need special software to upload or download files.
 
 ## Why?
 
