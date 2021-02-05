@@ -206,7 +206,6 @@ impl PostBuffer {
     }
 
     fn write_to_file_final(&mut self, limit: usize) -> Result<(), String> {
-        println!("\rwrite_to_file_final\r");
         if self.current_file.is_none() {
             return Err("Attempted to write to a file before opening it.".to_string());
         }
@@ -223,7 +222,6 @@ impl PostBuffer {
     }
 
     fn write_and_shuffle(&mut self, up_to: usize) -> Result<(), String> {
-        println!("\rEntering shuffle {}\r", self.parse_idx);
         let written = match self
             .current_file
             .as_ref()
@@ -245,13 +243,11 @@ impl PostBuffer {
             if amount_remaining > self.parse_idx {
                 panic!("About to do a ptr::copy call on aliased memory locations.");
             }
-            println!("\rAbout to copy {} {}\r", self.parse_idx, amount_remaining);
             copy_nonoverlapping(
                 self.buffer.as_ptr().offset(self.parse_idx as isize),
                 self.buffer.as_mut_ptr(),
                 amount_remaining,
             );
-            println!("\rFinished copy {} {}\r", self.parse_idx, amount_remaining);
 
             /*
             // A safe version (if this copy could never alias) would be:
@@ -263,16 +259,10 @@ impl PostBuffer {
         self.parse_idx = 0;
         self.fill_location = amount_remaining;
 
-        println!(
-            "\rExiting shuffle {} {}\r",
-            self.parse_idx, amount_remaining
-        );
-
         Ok(())
     }
 
     fn send_buffer_data_to_file(&mut self, limit: usize) -> Result<(), String> {
-        println!("\rsend_buffer_data_to_file\r");
         if self.current_file.is_none() {
             return Err("Attempted to write to a file before opening it.".to_string());
         }
@@ -294,31 +284,22 @@ impl PostBuffer {
         loop {
             match self.state {
                 PostRequestState::AwaitingFirstBody => {
-                    println!(
-                        "\rAwaitingFirstBody {} {}\r",
-                        self.parse_idx, self.fill_location
-                    );
                     let new_idx = match self.find_next_delim(self.parse_idx) {
                         None => {
                             // Cannot find the delimeter, so keep reading. This is good
                             // for slow connections. If we can't find the delimeter in 4M
                             // eventually `read` will return 0 and the connection will be
                             // aborted.
-                            println!("\rNo delimeter found\r");
                             return Ok(false);
                         }
                         Some(idx) => idx + self.post_delimeter_string.len(),
                     };
-                    println!("\rFound delim: {} {}\r", self.parse_idx, new_idx);
-
                     if self.fill_location - new_idx < 2 {
-                        println!("\rDid not get final CRLF\r");
                         // Need to get \r\n or --
                         return Ok(false);
                     }
 
                     if self.buffer[new_idx] == '-' as u8 && self.buffer[new_idx + 1] == '-' as u8 {
-                        println!("\rRead final delimeter: {} {}\r", self.parse_idx, new_idx);
                         // Read final delimeter, so we're done.
                         return Ok(true);
                     }
@@ -329,13 +310,6 @@ impl PostBuffer {
                         match find_body_start(&self.buffer[self.parse_idx..self.fill_location]) {
                             Some(idx) => idx + self.parse_idx,
                             None => {
-                                println!(
-                                    "\rAwaiting meta: {} {}: `{} {}`\r",
-                                    self.parse_idx,
-                                    new_idx,
-                                    self.buffer[new_idx],
-                                    self.buffer[new_idx + 1]
-                                );
                                 self.state = PostRequestState::AwaitingMeta;
                                 return Ok(false);
                             }
@@ -407,16 +381,11 @@ impl PostBuffer {
                     self.state = PostRequestState::AwaitingBody;
 
                     self.parse_idx = body_start;
-
-                    println!("\rDone with AwaitingFirstBody\r");
                 }
                 PostRequestState::AwaitingBody => {
-                    println!("\rAwaitingBody\r");
                     let end = match self.find_next_delim(self.parse_idx) {
                         None => {
-                            println!("\rAbout to write a file: {}\r", self.parse_idx);
                             self.send_buffer_data_to_file(self.fill_location)?;
-                            println!("\rWritten: {}\r", self.fill_location);
                             return Ok(false);
                         }
                         Some(idx) => {
@@ -426,8 +395,6 @@ impl PostBuffer {
                             idx - 2
                         }
                     };
-
-                    println!("\rFound delim(2): {} {}\r", self.parse_idx, end);
 
                     self.write_to_file_final(end)?;
 
@@ -835,7 +802,6 @@ impl HttpTui<'_> {
 
         let mut pb = PostBuffer::new(canonical_path, post_delimeter, real_boundary);
         pb.fill_location = conn.bytes_read - conn.body_start_location;
-        println!("\rSetting fill_location to {}\r", pb.fill_location);
         &pb.buffer[..pb.fill_location]
             .clone_from_slice(&conn.buffer[conn.body_start_location..conn.bytes_read]);
 
@@ -1118,26 +1084,33 @@ impl HttpTui<'_> {
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
         let pb = &mut conn.post_buffer.as_mut().unwrap();
-        match pb.handle_new_data() {
+        let res = match pb.handle_new_data() {
             Ok(done) => {
                 if done {
-                    return self.create_oneoff_response(
+                    self.create_oneoff_response(
                         HttpStatus::OK,
                         conn,
                         Some(format!("File successfully uploaded")),
-                    );
+                    )
                 } else {
                     Ok(ConnectionState::ReadingPostBody)
                 }
             }
-            Err(s) => {
-                return self.create_oneoff_response(
-                    HttpStatus::ServerError,
-                    conn,
-                    Some(format!("Error while parsing POST request: {}", s)),
-                );
+            Err(s) => self.create_oneoff_response(
+                HttpStatus::ServerError,
+                conn,
+                Some(format!("Error while parsing POST request: {}", s)),
+            ),
+        };
+
+        match res {
+            Ok(ConnectionState::ReadingPostBody) => {}
+            _ => {
+                let _ = self.write_conn_to_history(conn);
             }
-        }
+        };
+
+        res
     }
 
     fn read_partial_post_body(
