@@ -1,12 +1,22 @@
-# Simple HTTP server with TUI
+# HyperShare
 
-So you want to send a file to someone, but you can't or don't want to put the file on a cloud storage system. You could use nginx, SimpleHTTPServer, or some other HTTP or SSH or FTP or anything server, but most of your choices are either too large, too complicated, or don't implement enough of the HTTP protocol to be useful. Also, NONE of them give you the option to inspect connections as they are served.
+Kind of like OnionShare but for normal people.
 
-That is why I wrote this. HTTP-TUI is a reasonably fast, single-threaded HTTP server designed for low-volume, high-bandwidth activity. It's key feature is that connections and download progress can be observed.
+An interactive HTTP server that can both serve and accept files.
 
-HTTP-TUI has three controls:
+## Why?
+
+So you want to send a file to someone, but you can't or don't want to put the file on a cloud storage system. You could use nginx, SimpleHTTPServer, or some other HTTP, SSH, or FTP server, but most of your choices are either too large, too complicated, or don't implement enough of their respective protocol to be useful. Also, basically NONE of them give you the option to inspect connections as they are served.
+
+That is why I wrote this. HyperShare is a reasonably fast, single-threaded HTTP server designed for low-volume, high-bandwidth activity. It's key feature is that connections and download progress can be observed.
+
+## Usage and Controls
+
+HyperShare has three controls:
 * Pressing Q will close the server and kill the interface.
 * Pressing Space will toggle the server's enabled/disabled state. When disabling the server, all in-flight responses will be completed, but new requests will receive an error page instead of the requested resource.
 * Pressing K will kill close all current connections immediately.
 
-If enabled with `-u`, HTTP-TUI will accept file uploads from POST requests. The appropriate form is generated in directory listings.
+## Uploading
+
+If enabled with `-u`, HyperShare will accept file uploads via POST requests. The appropriate HTML form is generated in directory listings. Files must be uploaded as `multipart/form-data`.
