@@ -306,11 +306,32 @@ impl PostBuffer {
 
                     self.parse_idx = new_idx + 2; // Skip \r\n
 
+                    self.state = PostRequestState::AwaitingMeta;
+                }
+                PostRequestState::AwaitingBody => {
+                    let end = match self.find_next_delim(self.parse_idx) {
+                        None => {
+                            self.send_buffer_data_to_file(self.fill_location)?;
+                            return Ok(false);
+                        }
+                        Some(idx) => {
+                            if idx < 2 {
+                                panic!("idx < 2");
+                            }
+                            idx - 2
+                        }
+                    };
+
+                    self.write_to_file_final(end)?;
+
+                    self.state = PostRequestState::AwaitingFirstBody;
+                }
+                PostRequestState::AwaitingMeta => {
                     let body_start =
                         match find_body_start(&self.buffer[self.parse_idx..self.fill_location]) {
                             Some(idx) => idx + self.parse_idx,
                             None => {
-                                self.state = PostRequestState::AwaitingMeta;
+                                // Waiting for more metadata
                                 return Ok(false);
                             }
                         };
@@ -381,30 +402,6 @@ impl PostBuffer {
                     self.state = PostRequestState::AwaitingBody;
 
                     self.parse_idx = body_start;
-                }
-                PostRequestState::AwaitingBody => {
-                    let end = match self.find_next_delim(self.parse_idx) {
-                        None => {
-                            self.send_buffer_data_to_file(self.fill_location)?;
-                            return Ok(false);
-                        }
-                        Some(idx) => {
-                            if idx < 2 {
-                                panic!("idx < 2");
-                            }
-                            idx - 2
-                        }
-                    };
-
-                    self.write_to_file_final(end)?;
-
-                    self.state = PostRequestState::AwaitingFirstBody;
-                }
-                // TODO: Test this.
-                // AwaitingMeta will only happen if Content-Disposition
-                // happens to land on a 4M boundary, very rare.
-                PostRequestState::AwaitingMeta => {
-                    panic!("AwaitingMeta not implemented");
                 }
             }
         }
@@ -1090,7 +1087,7 @@ impl HttpTui<'_> {
                     self.create_oneoff_response(
                         HttpStatus::OK,
                         conn,
-                        Some(format!("File successfully uploaded")),
+                        Some(format!("File received.")),
                     )
                 } else {
                     Ok(ConnectionState::ReadingPostBody)
