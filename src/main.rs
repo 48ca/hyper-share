@@ -36,7 +36,7 @@ use nix::unistd;
 use std::os::unix::io::RawFd;
 
 #[derive(Clap)]
-#[clap(version = "1.0", author = "James Houghton <jhoughton@virginia.edu>")]
+#[clap(version = "0.2.0", author = "James Houghton <jhoughton@virginia.edu>")]
 struct Opts {
     #[clap(short, long, default_value = ".")]
     directory: String,
