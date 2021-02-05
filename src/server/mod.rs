@@ -539,6 +539,8 @@ impl HttpTui<'_> {
                 }
             }
 
+            let mut force_close: bool = false;
+
             match r_fds.highest() {
                 None => {}
                 Some(mfd) => {
@@ -557,6 +559,9 @@ impl HttpTui<'_> {
                                 }
                                 if buf[0] as char == 't' {
                                     self.disabled = !self.disabled;
+                                }
+                                if buf[0] as char == 'k' {
+                                    force_close = true;
                                 }
                                 if buf[0] as char == 'p' {
                                     // Poked :)
@@ -635,7 +640,7 @@ impl HttpTui<'_> {
 
             let to_remove: Vec<_> = connections
                 .iter()
-                .filter(|&(_, conn)| conn.state == ConnectionState::Closing)
+                .filter(|&(_, conn)| conn.state == ConnectionState::Closing || force_close)
                 .map(|(k, _)| k.clone())
                 .collect();
             for fd in to_remove {

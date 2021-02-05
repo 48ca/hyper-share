@@ -283,6 +283,7 @@ impl ConnectionSet {
 enum ControlEvent {
     Quit,
     Toggle,
+    CloseAll,
 }
 
 fn main() -> Result<(), io::Error> {
@@ -347,9 +348,16 @@ fn main() -> Result<(), io::Error> {
         for evt in stdin.keys() {
             if let Ok(key) = evt {
                 match key {
+                    Key::Ctrl('c') => {
+                        let _ = tx.send(ControlEvent::Quit);
+                        break;
+                    }
                     Key::Char('q') => {
                         let _ = tx.send(ControlEvent::Quit);
                         break;
+                    }
+                    Key::Char('k') => {
+                        let _ = tx.send(ControlEvent::CloseAll);
                     }
                     Key::Char(' ') => {
                         let _ = tx.send(ControlEvent::Toggle);
@@ -530,7 +538,9 @@ fn display(
                 Ok(ControlEvent::Toggle) => {
                     let _ = unistd::write(write_end, b"t");
                     enabled = !enabled;
-                    break;
+                }
+                Ok(ControlEvent::CloseAll) => {
+                    let _ = unistd::write(write_end, b"k");
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     break;
