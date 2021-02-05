@@ -4,8 +4,9 @@ So you want to send a file to someone, but you can't or don't want to put the fi
 
 That is why I wrote this. HTTP-TUI is a reasonably fast, single-threaded HTTP server designed for low-volume, high-bandwidth activity. It's key feature is that connections and download progress can be observed.
 
-HTTP-TUI has two controls:
+HTTP-TUI has three controls:
 * Pressing Q will close the server and kill the interface.
 * Pressing Space will toggle the server's enabled/disabled state. When disabling the server, all in-flight responses will be completed, but new requests will receive an error page instead of the requested resource.
+* Pressing K will kill close all current connections immediately.
 
 If enabled with `-u`, HTTP-TUI will accept file uploads from POST requests. The appropriate form is generated in directory listings.
