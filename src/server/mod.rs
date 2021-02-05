@@ -992,7 +992,7 @@ impl HttpTui<'_> {
             &HttpVersion::Http1_1,
         );
 
-        resp.add_header("Server".to_string(), "http-tui".to_string());
+        resp.add_header("Server".to_string(), "hypershare".to_string());
         resp.add_header("Accept-Ranges".to_string(), "bytes".to_string());
 
         resp.set_content_length(range);
@@ -1276,7 +1276,7 @@ impl HttpTui<'_> {
     ) -> Result<ConnectionState, io::Error> {
         let body: String = rendering::render_error(&status, msg);
         let mut resp = HttpResponse::new(status.clone(), &HttpVersion::Http1_1);
-        resp.add_header("Server".to_string(), "http-tui".to_string());
+        resp.add_header("Server".to_string(), "hypershare".to_string());
 
         resp.set_content_length(body.len());
         resp.add_header(

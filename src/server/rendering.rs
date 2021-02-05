@@ -108,7 +108,7 @@ fn generate_default_footer() -> HtmlElement {
     let mut footer = HtmlElement::new("footer", HtmlStyle::CanHaveChildren);
     let hr = HtmlElement::new("hr", HtmlStyle::NoChildren);
     let mut pre = HtmlElement::new("pre", HtmlStyle::CanHaveChildren);
-    pre.add_text(format!("Rendered with httptui revision {}.", GIT_HASH));
+    pre.add_text(format!("Rendered with hypershare revision {}.", GIT_HASH));
 
     footer.add_child(hr);
     footer.add_child(pre);
