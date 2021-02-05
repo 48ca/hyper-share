@@ -27,8 +27,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time;
 
-mod server;
-use server::{HttpConnection, HttpTui};
+mod http;
+use http::{HttpConnection, HttpTui};
 
 use std::net::SocketAddr;
 

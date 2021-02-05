@@ -4,7 +4,7 @@ use std::path::Path;
 use std::collections::HashMap;
 use std::io::Read;
 
-use crate::server::http_core;
+use crate::http::http_core;
 
 const GIT_HASH: &'static str = env!("GIT_HASH");
 
