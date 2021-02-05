@@ -15,8 +15,14 @@ That is why I wrote this. HyperShare is a reasonably fast, single-threaded HTTP 
 HyperShare has three controls:
 * Pressing Q will close the server and kill the interface.
 * Pressing Space will toggle the server's enabled/disabled state. When disabling the server, all in-flight responses will be completed, but new requests will receive an error page instead of the requested resource.
-* Pressing K will kill close all current connections immediately.
+* Pressing K will kill all current connections immediately, but new connections will still be accepted.
 
-## Uploading
+HyperShare supports various modes of operation. See `hypershare --help` for more information.
+
+### Defaults
+
+HyperShare will listen on `localhost:80` and serve your current working directory by default.
+
+### Uploading
 
 If enabled with `-u`, HyperShare will accept file uploads via POST requests. The appropriate HTML form is generated in directory listings. Files must be uploaded as `multipart/form-data`.
