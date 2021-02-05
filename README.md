@@ -8,4 +8,4 @@ HTTP-TUI has two controls:
 * Pressing Q will close the server and kill the interface.
 * Pressing Space will toggle the server's enabled/disabled state. When disabling the server, all in-flight responses will be completed, but new requests will receive an error page instead of the requested resource.
 
-Uploading capabilities will come soon.
+If enabled with `-u`, HTTP-TUI will accept file uploads from POST requests. The appropriate form is generated in directory listings.

@@ -43,7 +43,7 @@ use core::slice::Iter;
 use boyer_moore_magiclen::{BMByte, BMByteSearchable};
 
 const BUFFER_SIZE: usize = 4096;
-const POST_BUFFER_SIZE: usize = 16 * 1024 * 1024;
+const POST_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
 fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
     match error.kind() {
