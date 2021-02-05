@@ -1192,7 +1192,12 @@ impl HttpTui<'_> {
             }
             Err(s) => {
                 if !conn.discarding_data {
-                    conn.keep_alive = true;
+                    // Turn keep-alive off because we do
+                    // not support additional requests after
+                    // a POST request. This is because the
+                    // PostBuffer and the standand request buffer
+                    // are not unified.
+                    conn.keep_alive = false;
                     conn.discarding_data = true;
                     self.create_oneoff_response(
                         HttpStatus::ServerError,
