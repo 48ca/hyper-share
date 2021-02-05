@@ -5,7 +5,7 @@ use nix::unistd;
 
 use std::fs::OpenOptions;
 
-use std::ptr::copy_nonoverlapping;
+use std::ptr::copy;
 
 use std::path::PathBuf;
 
@@ -43,7 +43,7 @@ use core::slice::Iter;
 use boyer_moore_magiclen::{BMByte, BMByteSearchable};
 
 const BUFFER_SIZE: usize = 4096;
-const POST_BUFFER_SIZE: usize = 4 * 1024 * 1024;
+const POST_BUFFER_SIZE: usize = 32 * 1024 * 1024;
 
 fn resolve_io_error(error: &io::Error) -> Option<HttpStatus> {
     match error.kind() {
@@ -167,23 +167,31 @@ pub enum PostRequestState {
     AwaitingFirstBody,
     AwaitingBody,
     AwaitingMeta,
+    DiscardingData,
 }
 
 pub struct PostBuffer {
     pub fill_location: usize,
-    pub buffer: Box<[u8; POST_BUFFER_SIZE]>,
+    pub buffer: Box<[u8]>,
     pub post_delimeter: BMByte,
     pub post_delimeter_string: String,
     pub current_file: Option<fs::File>,
     pub state: PostRequestState,
     pub dir: PathBuf,
     pub parse_idx: usize,
+    pub queued_error: String,
 }
 
 impl PostBuffer {
     pub fn new(dir: PathBuf, delim: BMByte, delim_str: String) -> PostBuffer {
         PostBuffer {
-            buffer: Box::new([0; POST_BUFFER_SIZE]),
+            buffer: {
+                let mut v: Vec<u8> = Vec::with_capacity(POST_BUFFER_SIZE);
+                unsafe {
+                    v.set_len(POST_BUFFER_SIZE);
+                }
+                v.into_boxed_slice()
+            },
             fill_location: 0,
             post_delimeter: delim,
             post_delimeter_string: delim_str,
@@ -191,6 +199,7 @@ impl PostBuffer {
             state: PostRequestState::AwaitingFirstBody,
             dir: dir,
             parse_idx: 0,
+            queued_error: format!(""),
         }
     }
 
@@ -221,6 +230,30 @@ impl PostBuffer {
         Ok(())
     }
 
+    fn shuffle(&mut self, remain: usize) {
+        // Shuffle
+        unsafe {
+            /*
+            if amount_remaining > self.parse_idx {
+                panic!("About to do a ptr::copy_nonoverlapping call on aliased memory locations.");
+            }
+            */
+            copy(
+                self.buffer.as_ptr().offset(self.parse_idx as isize),
+                self.buffer.as_mut_ptr(),
+                remain,
+            );
+            /*
+            // A safe version (if this copy could never alias) would be:
+            &self.buffer[..amount_remaining]
+                .clone_from_slice(&self.buffer[self.parse_idx..self.fill_location]);
+            */
+        }
+
+        self.parse_idx = 0;
+        self.fill_location = remain;
+    }
+
     fn write_and_shuffle(&mut self, up_to: usize) -> Result<(), String> {
         let written = match self
             .current_file
@@ -238,26 +271,7 @@ impl PostBuffer {
 
         let amount_remaining: usize = self.fill_location - self.parse_idx;
 
-        unsafe {
-            // Shuffle
-            if amount_remaining > self.parse_idx {
-                panic!("About to do a ptr::copy call on aliased memory locations.");
-            }
-            copy_nonoverlapping(
-                self.buffer.as_ptr().offset(self.parse_idx as isize),
-                self.buffer.as_mut_ptr(),
-                amount_remaining,
-            );
-
-            /*
-            // A safe version (if this copy could never alias) would be:
-            &self.buffer[..amount_remaining]
-                .clone_from_slice(&self.buffer[self.parse_idx..self.fill_location]);
-            */
-        }
-
-        self.parse_idx = 0;
-        self.fill_location = amount_remaining;
+        self.shuffle(amount_remaining);
 
         Ok(())
     }
@@ -279,15 +293,71 @@ impl PostBuffer {
         Ok(())
     }
 
+    /* This function implements the worst aspect of HTTP POST:
+     * before the browser will accept our response, we must first read the entire
+     * request body from the browser.
+     * To do this, when an error is detected, we switch the internal state of
+     * PostBuffer to start discarding all data, but tell the rest of the server
+     * that nothing has gone wrong.
+     * We pre-prepare the error message to be sent, but only write its contents
+     * when the ConnectionState is switched to WritingResponse, which occurs
+     * when we've reached the end of the sent file.
+     */
+    /* If it is desirable to simply have bad POST requests get a TCP RST
+     * with no error message (although one is sent before the reset, browsers
+     * won't display it), call `handle_new_data()` directly.
+     */
+    pub fn handle_new_data_queue_error(&mut self) -> Result<bool, String> {
+        match self.handle_new_data() {
+            Ok(done) => {
+                if done && self.queued_error.len() > 0 {
+                    Err(self.queued_error.clone())
+                } else {
+                    Ok(done)
+                }
+            }
+            Err(s) => {
+                self.state = PostRequestState::DiscardingData;
+                self.queued_error = format!("{} * {}", self.queued_error, s);
+                self.handle_new_data()
+            }
+        }
+    }
+
     pub fn handle_new_data(&mut self) -> Result<bool, String> {
         // Where parsing should begin
         loop {
             match self.state {
+                PostRequestState::DiscardingData => {
+                    let new_idx = match self.find_next_delim(self.parse_idx) {
+                        None => {
+                            // Cannot find the delimeter, so keep reading. This is good
+                            // for slow connections. If we can't find the delimeter in 32M
+                            // eventually `read` will return 0 and the connection will be
+                            // aborted.
+                            self.shuffle(self.post_delimeter_string.len());
+                            return Ok(false);
+                        }
+                        Some(idx) => idx + self.post_delimeter_string.len(),
+                    };
+                    if self.fill_location - new_idx < 2 {
+                        self.shuffle(self.post_delimeter_string.len() + 2);
+                        // Need to get \r\n or --
+                        return Ok(false);
+                    }
+
+                    if self.buffer[new_idx] == '-' as u8 && self.buffer[new_idx + 1] == '-' as u8 {
+                        // Read final delimeter, so we're done.
+                        return Ok(true);
+                    }
+
+                    self.shuffle(self.post_delimeter_string.len());
+                }
                 PostRequestState::AwaitingFirstBody => {
                     let new_idx = match self.find_next_delim(self.parse_idx) {
                         None => {
                             // Cannot find the delimeter, so keep reading. This is good
-                            // for slow connections. If we can't find the delimeter in 4M
+                            // for slow connections. If we can't find the delimeter in 32M
                             // eventually `read` will return 0 and the connection will be
                             // aborted.
                             return Ok(false);
@@ -427,6 +497,7 @@ pub struct HttpConnection {
     pub num_requests: usize,
 
     pub keep_alive: bool,
+    pub discarding_data: bool,
 
     pub bytes_requested: usize,
     pub bytes_sent: usize,
@@ -447,6 +518,7 @@ impl HttpConnection {
             bytes_sent: 0,
             last_requested_uri: None,
             last_requested_method: None,
+            discarding_data: false,
             num_requests: 0,
         };
     }
@@ -454,6 +526,7 @@ impl HttpConnection {
     pub fn reset(&mut self) {
         self.bytes_read = 0;
         self.response = None;
+        self.post_buffer = None;
     }
 }
 
@@ -759,7 +832,7 @@ impl HttpTui<'_> {
     ) -> Result<HttpResult, io::Error> {
         if !self.uploading {
             return Ok(HttpResult::Error(
-                HttpStatus::NotImplemented,
+                HttpStatus::MethodNotAllowed,
                 Some(format!("This server does not accept POST requests.")),
             ));
         }
@@ -916,7 +989,7 @@ impl HttpTui<'_> {
             } else {
                 HttpStatus::OK
             },
-            &req.version,
+            &HttpVersion::Http1_1,
         );
 
         resp.add_header("Server".to_string(), "http-tui".to_string());
@@ -1100,33 +1173,37 @@ impl HttpTui<'_> {
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
         let pb = &mut conn.post_buffer.as_mut().unwrap();
-        let res = match pb.handle_new_data() {
+        match pb.handle_new_data_queue_error() {
             Ok(done) => {
                 if done {
-                    self.create_oneoff_response(
-                        HttpStatus::OK,
-                        conn,
-                        Some(format!("File received.")),
-                    )
+                    if conn.discarding_data {
+                        conn.discarding_data = false;
+                        Ok(ConnectionState::WritingResponse)
+                    } else {
+                        self.create_oneoff_response(
+                            HttpStatus::Created,
+                            conn,
+                            Some(format!("File received.")),
+                        )
+                    }
                 } else {
                     Ok(ConnectionState::ReadingPostBody)
                 }
             }
-            Err(s) => self.create_oneoff_response(
-                HttpStatus::ServerError,
-                conn,
-                Some(format!("Error while parsing POST request: {}", s)),
-            ),
-        };
-
-        match res {
-            Ok(ConnectionState::ReadingPostBody) => {}
-            _ => {
-                let _ = self.write_conn_to_history(conn);
+            Err(s) => {
+                if !conn.discarding_data {
+                    conn.keep_alive = true;
+                    conn.discarding_data = true;
+                    self.create_oneoff_response(
+                        HttpStatus::ServerError,
+                        conn,
+                        Some(format!("Error while parsing POST request: {}", s)),
+                    )
+                } else {
+                    Ok(ConnectionState::WritingResponse)
+                }
             }
-        };
-
-        res
+        }
     }
 
     fn read_partial_post_body(
@@ -1156,7 +1233,15 @@ impl HttpTui<'_> {
                 return res;
             }
 
-            self.check_partial_post_body(conn)
+            let res = self.check_partial_post_body(conn);
+            match res {
+                Ok(ConnectionState::ReadingPostBody) => {}
+                _ => {
+                    let _ = self.write_conn_to_history(conn);
+                }
+            };
+
+            res
         } else {
             return self.create_oneoff_response(
                 HttpStatus::ServerError,
@@ -1190,8 +1275,9 @@ impl HttpTui<'_> {
         msg: Option<String>,
     ) -> Result<ConnectionState, io::Error> {
         let body: String = rendering::render_error(&status, msg);
-        let mut resp = HttpResponse::new(status, &HttpVersion::Http1_0);
+        let mut resp = HttpResponse::new(status.clone(), &HttpVersion::Http1_1);
         resp.add_header("Server".to_string(), "http-tui".to_string());
+
         resp.set_content_length(body.len());
         resp.add_header(
             "Connection".to_string(),
@@ -1212,6 +1298,7 @@ impl HttpTui<'_> {
         resp.write_headers_to_stream(&conn.stream)?;
         resp.add_body(data);
 
+        assert_eq!(conn.response.is_none(), true);
         conn.response = Some(resp);
 
         Ok(ConnectionState::WritingResponse)

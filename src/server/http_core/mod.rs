@@ -4,7 +4,6 @@ use regex::{Captures, Regex};
 use std::boxed::Box;
 use std::cmp::min;
 use std::io;
-use std::mem;
 use std::net::TcpStream;
 
 use std::io::Write;
@@ -34,12 +33,15 @@ pub fn version_to_str(v: &HttpVersion) -> &'static str {
 
 pub const BUFFER_SIZE: usize = 512 * 1024;
 
+#[derive(PartialEq, Clone)]
 pub enum HttpStatus {
     OK,                      // 200
+    Created,                 // 201
     PartialContent,          // 206
     BadRequest,              // 401
     PermissionDenied,        // 403
     NotFound,                // 404
+    MethodNotAllowed,        // 405
     RequestHeadersTooLarge,  // 431
     ServerError,             // 500
     NotImplemented,          // 501
@@ -50,10 +52,12 @@ pub enum HttpStatus {
 pub fn status_to_code(status: &HttpStatus) -> u16 {
     match status {
         HttpStatus::OK => 200,
+        HttpStatus::Created => 201,
         HttpStatus::PartialContent => 206,
         HttpStatus::BadRequest => 401,
         HttpStatus::PermissionDenied => 403,
         HttpStatus::NotFound => 404,
+        HttpStatus::MethodNotAllowed => 405,
         HttpStatus::RequestHeadersTooLarge => 431,
         HttpStatus::ServerError => 500,
         HttpStatus::NotImplemented => 501,
@@ -65,10 +69,12 @@ pub fn status_to_code(status: &HttpStatus) -> u16 {
 pub fn status_to_message(status: &HttpStatus) -> &'static str {
     match status {
         HttpStatus::OK => "OK",
+        HttpStatus::Created => "Created",
         HttpStatus::PartialContent => "Partial Content",
         HttpStatus::BadRequest => "Bad request",
         HttpStatus::PermissionDenied => "Permission denied",
         HttpStatus::NotFound => "Not found",
+        HttpStatus::MethodNotAllowed => "Method not allowed",
         HttpStatus::RequestHeadersTooLarge => "Request header fields too large",
         HttpStatus::ServerError => "Server error",
         HttpStatus::NotImplemented => "Method not implemented",
@@ -200,20 +206,25 @@ pub struct HttpResponse {
     headers_written: bool,
     last_write_length: usize,
     data: ResponseDataType,
-    buffer: Box<[u8; BUFFER_SIZE]>,
+    buffer: Box<[u8]>,
     bytes_to_write: usize,
 }
 
 impl HttpResponse {
     pub fn new(status: HttpStatus, version: &HttpVersion) -> HttpResponse {
-        let buf: [u8; BUFFER_SIZE] = unsafe { mem::MaybeUninit::uninit().assume_init() };
         HttpResponse {
             status: status,
             version: version.clone(),
             headers: HttpHeaderSet::new(),
             headers_written: false,
             last_write_length: BUFFER_SIZE,
-            buffer: Box::new(buf),
+            buffer: {
+                let mut v: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
+                unsafe {
+                    v.set_len(BUFFER_SIZE);
+                }
+                v.into_boxed_slice()
+            },
             data: ResponseDataType::None,
             bytes_to_write: 0,
         }
