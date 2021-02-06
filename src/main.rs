@@ -399,6 +399,7 @@ fn main() -> Result<(), io::Error> {
         let _ = thd.join();
         let _ = keys.join();
     } else {
+        println!("Listening on {}:{}", opts.host, opts.port);
         tui.run(read_end, move |_connections| loop {
             match hist_rx.try_recv() {
                 Ok(s) => {
