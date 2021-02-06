@@ -60,7 +60,7 @@ struct Opts {
         about = "In milliseconds, how often the UI will be updated."
     )]
     ui_refresh_rate: u64,
-    #[clap(long)]
+    #[clap(long, about = "Do not start the interface (useful for testing).")]
     headless: bool,
 }
 
