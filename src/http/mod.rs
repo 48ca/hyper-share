@@ -872,7 +872,7 @@ impl HttpTui<'_> {
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
         if let Some(pb) = &mut conn.post_buffer {
-            let bytes_read = match conn.stream.read(pb.get_open_slice()) {
+            let bytes_read = match pb.read_into_buffer(&mut conn.stream) {
                 Ok(size) => size,
                 Err(_err) => {
                     // Even though the server has run into a problem, because it is
@@ -882,7 +882,6 @@ impl HttpTui<'_> {
                 }
             };
             conn.bytes_read += bytes_read;
-            pb.update_fill_location(bytes_read);
 
             if bytes_read == 0 {
                 let res = self.create_oneoff_response(

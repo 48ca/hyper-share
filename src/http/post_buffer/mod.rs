@@ -1,6 +1,6 @@
 use std::fs::{self, OpenOptions};
 
-use std::io::Write;
+use std::io::{self, Write};
 
 use std::path::PathBuf;
 
@@ -63,12 +63,13 @@ impl PostBuffer {
         &self.new_files
     }
 
-    pub fn get_open_slice(&mut self) -> &mut [u8] {
-        &mut self.buffer[self.fill_location..]
-    }
-
-    pub fn update_fill_location(&mut self, inc: usize) {
-        self.fill_location += inc;
+    pub fn read_into_buffer<T>(&mut self, readable: &mut T) -> Result<usize, io::Error>
+    where
+        T: io::Read,
+    {
+        let read = readable.read(&mut self.buffer[self.fill_location..])?;
+        self.fill_location += read;
+        Ok(read)
     }
 
     fn find_next_delim(&self, start: usize) -> Option<usize> {
