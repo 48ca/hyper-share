@@ -400,7 +400,7 @@ fn main() -> Result<(), io::Error> {
         tui.run(read_end, move |_connections| loop {
             match hist_rx.try_recv() {
                 Ok(s) => {
-                    println!("hypershare: {}", s);
+                    println!("{}", s);
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     break;
