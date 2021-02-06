@@ -21,20 +21,25 @@ echo "Generating files..."
 dd if=/dev/urandom of=$DIR/test_1m.img bs=1K count=1K 2>&1 > /dev/null
 dd if=/dev/urandom of=$DIR/test_512m.img bs=1K count=512K 2>&1 > /dev/null
 touch $DIR/test_0b.img
+echo ":)" > $DIR/test_small.img
 
-echo -e "\n.... Well-Formed Request Tests ...."
+echo -e "\n.... Well-Formed POST Requests ...."
 
 echo "TEST: 1M file... "
-templates/wellformed_request.sh test_1m.img
+templates/wellformed_post_request.sh test_1m.img
 rm $DIR/test_1m.img
 
 echo "TEST: 512M file... "
-templates/wellformed_request.sh test_512m.img
+templates/wellformed_post_request.sh test_512m.img
 rm $DIR/test_512m.img
 
 echo "TEST: 0B file... "
-templates/wellformed_request.sh test_0b.img
+templates/wellformed_post_request.sh test_0b.img
 rm $DIR/test_0b.img
+
+echo "TEST: Small file... "
+templates/wellformed_post_request.sh test_small.img
+rm $DIR/test_small.img
 
 echo -e "...................................\n"
 echo "Killing hypershare and cleaning up"
