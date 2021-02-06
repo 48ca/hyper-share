@@ -251,7 +251,15 @@ fn generate_dir_table(path: &Path, relative_path: &str) -> HtmlElement {
 
 pub fn render_directory(relative_path: &str, path: &Path, show_form: bool) -> String {
     let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
+    html.add_attribute("lang".to_string(), "en".to_string());
     let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
+
+    let mut title = HtmlElement::new("title", HtmlStyle::CanHaveChildren);
+    title.add_text(format!("hypershare: /{}", relative_path));
+    head.add_child(title);
+
+    head.add_child(create_viewport_meta());
+
     let mut style = HtmlElement::new("style", HtmlStyle::CanHaveChildren);
     style.add_text(
         r#"
@@ -261,6 +269,7 @@ pub fn render_directory(relative_path: &str, path: &Path, show_form: bool) -> St
         .to_string(),
     );
     head.add_child(style);
+
     let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);
     let mut h1 = HtmlElement::new("h1", HtmlStyle::CanHaveChildren);
 
@@ -297,8 +306,10 @@ pub fn render_directory(relative_path: &str, path: &Path, show_form: bool) -> St
         let mut file_input = HtmlElement::new("input", HtmlStyle::NoChildren);
         file_input.add_attribute("type".to_string(), "file".to_string());
         file_input.add_attribute("name".to_string(), "data".to_string());
+
         let mut submit_input = HtmlElement::new("input", HtmlStyle::NoChildren);
         submit_input.add_attribute("type".to_string(), "submit".to_string());
+        file_input.add_attribute("value".to_string(), "Upload".to_string());
 
         upload_form.add_child(file_input);
         upload_form.add_child(submit_input);
@@ -313,9 +324,29 @@ pub fn render_directory(relative_path: &str, path: &Path, show_form: bool) -> St
     format!("<!DOCTYPE html>{}", html.render())
 }
 
+fn create_viewport_meta() -> HtmlElement {
+    let mut meta = HtmlElement::new("meta", HtmlStyle::NoChildren);
+    meta.add_attribute("name".to_string(), "viewport".to_string());
+    meta.add_attribute(
+        "content".to_string(),
+        "width=device-width, initial-scale=1.0".to_string(),
+    );
+
+    meta
+}
+
 pub fn render_error(status: &http_core::HttpStatus, msg: Option<String>) -> String {
     let mut html = HtmlElement::new("html", HtmlStyle::CanHaveChildren);
+    html.add_attribute("lang".to_string(), "en".to_string());
+
     let mut head = HtmlElement::new("head", HtmlStyle::CanHaveChildren);
+
+    let mut title = HtmlElement::new("title", HtmlStyle::CanHaveChildren);
+    title.add_text(format!("hypershare: {}", http_core::status_to_code(status)));
+    head.add_child(title);
+
+    head.add_child(create_viewport_meta());
+
     let mut body = HtmlElement::new("body", HtmlStyle::CanHaveChildren);
     let mut h1 = HtmlElement::new("h1", HtmlStyle::CanHaveChildren);
 
