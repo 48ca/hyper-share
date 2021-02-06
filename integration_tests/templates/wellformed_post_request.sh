@@ -10,18 +10,18 @@ NC='\033[0m' # No Color
 
 # echo "Writing $file to hypershare"
 
-LF=$(echo -ne '\r')
+CR=$(echo -ne '\r')
 
 (
 cat - $DIR/$file <(echo -en "\r\n--$BOUNDARY--") << EOF
-POST / HTTP/1.0$LF
-Host: localhost$LF
-Connection: close$LF
-Content-Type: multpart/form-data;boundary="$BOUNDARY"$LF
-$LF
---$BOUNDARY$LF
-Content-Disposition: form-data; filename="$output_file"$LF
-$LF
+POST / HTTP/1.0$CR
+Host: localhost$CR
+Connection: close$CR
+Content-Type: multpart/form-data;boundary="$BOUNDARY"$CR
+$CR
+--$BOUNDARY$CR
+Content-Disposition: form-data; filename="$output_file"$CR
+$CR
 EOF
 ) | nc -t localhost $PORT | head -n1 | sed -e 's/^/ >>> response: /'
 
