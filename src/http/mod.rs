@@ -158,7 +158,6 @@ pub struct HttpConnection {
     pub num_requests: usize,
 
     pub keep_alive: bool,
-    pub discarding_data: bool,
 
     pub bytes_requested: usize,
     pub bytes_sent: usize,
@@ -179,7 +178,6 @@ impl HttpConnection {
             bytes_sent: 0,
             last_requested_uri: None,
             last_requested_method: None,
-            discarding_data: false,
             num_requests: 0,
         };
     }
@@ -839,37 +837,22 @@ impl HttpTui<'_> {
         match pb.handle_new_data_queue_error() {
             Ok(done) => {
                 if done {
-                    if conn.discarding_data {
-                        conn.discarding_data = false;
-                        Ok(ConnectionState::WritingResponse)
-                    } else {
-                        self.create_oneoff_response(
-                            HttpStatus::Created,
-                            conn,
-                            Some(format!("File received.")),
-                        )
-                    }
+                    self.create_oneoff_response(
+                        HttpStatus::Created,
+                        conn,
+                        Some(format!("File received.")),
+                    )
                 } else {
                     Ok(ConnectionState::ReadingPostBody)
                 }
             }
             Err(s) => {
-                if !conn.discarding_data {
-                    // Turn keep-alive off because we do
-                    // not support additional requests after
-                    // a POST request. This is because the
-                    // PostBuffer and the standand request buffer
-                    // are not unified.
-                    conn.keep_alive = false;
-                    conn.discarding_data = true;
-                    self.create_oneoff_response(
-                        HttpStatus::ServerError,
-                        conn,
-                        Some(format!("Error while parsing POST request: {}", s)),
-                    )
-                } else {
-                    Ok(ConnectionState::WritingResponse)
-                }
+                conn.keep_alive = false;
+                self.create_oneoff_response(
+                    HttpStatus::ServerError,
+                    conn,
+                    Some(format!("Error while parsing POST request: {}", s)),
+                )
             }
         }
     }

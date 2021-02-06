@@ -13,6 +13,7 @@ use crate::http::boyer_moore::types::BMBuf;
 
 const POST_BUFFER_SIZE: usize = 32 * 1024 * 1024;
 
+#[derive(PartialEq)]
 enum PostRequestState {
     AwaitingFirstBody,
     AwaitingBody,
@@ -169,18 +170,19 @@ impl PostBuffer {
      * won't display it), call `handle_new_data()` directly.
      */
     pub fn handle_new_data_queue_error(&mut self) -> Result<bool, String> {
-        match self.handle_new_data() {
-            Ok(done) => {
-                if done && self.queued_error.len() > 0 {
-                    Err(self.queued_error.clone())
-                } else {
-                    Ok(done)
+        loop {
+            match self.handle_new_data() {
+                Ok(done) => {
+                    if done && self.state == PostRequestState::DiscardingData {
+                        return Err(self.queued_error.clone());
+                    } else {
+                        return Ok(done);
+                    }
                 }
-            }
-            Err(s) => {
-                self.state = PostRequestState::DiscardingData;
-                self.queued_error = format!("{} * {}", self.queued_error, s);
-                self.handle_new_data()
+                Err(s) => {
+                    self.state = PostRequestState::DiscardingData;
+                    self.queued_error = format!("{} * {}", self.queued_error, s);
+                }
             }
         }
     }
