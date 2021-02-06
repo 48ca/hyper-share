@@ -117,6 +117,10 @@ impl PostBuffer {
     }
 
     fn write_and_shuffle(&mut self, up_to: usize) -> Result<(), String> {
+        if up_to <= self.parse_idx {
+            // Need to read more before this can occur
+            return Ok(());
+        }
         let written = match self
             .current_file
             .as_ref()
@@ -277,13 +281,13 @@ impl PostBuffer {
                     let mut info: &str = "";
 
                     for line in meta_str.split("\r\n") {
-                        let (head, val) = line.split_at(match meta_str.find(":") {
-                            Some(idx) => idx,
+                        let (head, val) = line.split_at(match line.find(":") {
+                            Some(idx) => idx + 1,
                             None => {
-                                return Err("Could not find ':' in Content-Disposition".to_string());
+                                continue;
                             }
                         });
-                        if head.to_lowercase() == "content-disposition" {
+                        if head.to_lowercase() == "content-disposition:" {
                             info = val;
                             break;
                         }
@@ -308,7 +312,7 @@ impl PostBuffer {
                     }
 
                     if filename == "" {
-                        return Err("Could not attribute with a filename".to_string());
+                        return Err("Could not find attribute with a filename".to_string());
                     }
 
                     if filename.contains("/") {

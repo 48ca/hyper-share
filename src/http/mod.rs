@@ -124,13 +124,6 @@ fn decode_request(req_body: &[u8]) -> Result<HttpRequest, HttpStatus> {
     return HttpRequest::new(request_str);
 }
 
-fn end_of_http_request(req_body: &[u8]) -> bool {
-    if req_body.len() < 4 {
-        return false;
-    }
-    return &req_body[req_body.len() - 4..] == b"\r\n\r\n";
-}
-
 #[derive(PartialEq, Debug)]
 pub enum ConnectionState {
     ReadingRequest,
@@ -455,12 +448,7 @@ impl HttpTui<'_> {
         };
 
         conn.bytes_read += bytes_read;
-        if end_of_http_request(&buffer[..conn.bytes_read]) {
-            conn.body_start_location = conn.bytes_read;
-            // Once we have read the request, handle it.
-            // The connection state will be updated accordingly
-            self.handle_request(conn)
-        } else if bytes_read == 0 {
+        if bytes_read == 0 {
             return Ok(ConnectionState::Closing);
         } else if conn.bytes_read == buffer.len() {
             if let Some(start) = boyer_moore::find_body_start(&conn.buffer[..conn.bytes_read]) {
