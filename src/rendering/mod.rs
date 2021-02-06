@@ -256,6 +256,7 @@ pub fn render_directory(relative_path: &str, path: &Path, show_form: bool) -> St
     style.add_text(
         r#"
     tr { font-family: monospace; }
+    pre { margin-top: 0px; margin-bottom: 0px }
     "#
         .to_string(),
     );
@@ -308,7 +309,8 @@ pub fn render_directory(relative_path: &str, path: &Path, show_form: bool) -> St
 
     body.add_child(generate_default_footer());
     html.add_child(body);
-    html.render()
+
+    format!("<!DOCTYPE html>{}", html.render())
 }
 
 pub fn render_error(status: &http_core::HttpStatus, msg: Option<String>) -> String {
@@ -346,5 +348,6 @@ pub fn render_error(status: &http_core::HttpStatus, msg: Option<String>) -> Stri
     body.add_child(generate_default_footer());
     html.add_child(head);
     html.add_child(body);
-    html.render()
+
+    format!("<!DOCTYPE html>{}", html.render())
 }

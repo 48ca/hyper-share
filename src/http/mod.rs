@@ -1,7 +1,6 @@
 mod boyer_moore;
-mod http_core;
+pub mod http_core;
 mod post_buffer;
-mod rendering;
 
 use post_buffer::PostBuffer;
 
@@ -35,6 +34,8 @@ use std::path::Path;
 
 use http_core::types::{ResponseDataType, SeekableString};
 use http_core::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion};
+
+use crate::rendering;
 
 use boyer_moore_magiclen::BMByte;
 
@@ -614,7 +615,7 @@ impl HttpTui<'_> {
             );
             let len = s.len();
             let data = ResponseDataType::String(SeekableString::new(s));
-            (data, len, Some("text/html"))
+            (data, len, Some("text/html; charset=utf-8"))
         } else {
             let data = ResponseDataType::File(fs::File::open(&canonical_path)?);
             let len = if metadata.is_file() {
@@ -627,7 +628,7 @@ impl HttpTui<'_> {
                 data,
                 len,
                 if req.path.ends_with(".html") {
-                    Some("text/html")
+                    Some("text/html; charset=utf-8")
                 } else {
                     None
                 },
@@ -947,7 +948,10 @@ impl HttpTui<'_> {
                 "close".to_string()
             },
         );
-        resp.add_header("Content-Type".to_string(), "text/html".to_string());
+        resp.add_header(
+            "Content-Type".to_string(),
+            "text/html; charset=utf-8".to_string(),
+        );
 
         // Add content-length to bytes requested
         conn.bytes_requested += body.len();

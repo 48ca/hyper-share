@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate lazy_static;
 
+mod http;
+mod rendering;
+
 use clap::Clap;
 
 use std::fs::canonicalize;
@@ -27,7 +30,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time;
 
-mod http;
 use http::{HttpConnection, HttpTui};
 
 use std::net::SocketAddr;
