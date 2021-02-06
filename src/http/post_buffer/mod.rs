@@ -247,7 +247,9 @@ impl PostBuffer {
                         }
                         Some(idx) => {
                             if idx < 2 {
-                                panic!("idx < 2");
+                                return Err(
+                                    "No CRLF before delimeter. Malformed request.".to_string()
+                                );
                             }
                             idx - 2
                         }

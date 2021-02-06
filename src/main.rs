@@ -60,6 +60,8 @@ struct Opts {
         about = "In milliseconds, how often the UI will be updated."
     )]
     ui_refresh_rate: u64,
+    #[clap(long)]
+    headless: bool,
 }
 
 struct ConnectionSpeedMeasurement {
@@ -315,11 +317,6 @@ fn main() -> Result<(), io::Error> {
         }
     };
 
-    let connection_set = Arc::new(Mutex::new(ConnectionSet::new()));
-    let connection_set_needs_update = Arc::new(AtomicBool::new(false));
-
-    let needs_update_clone = Arc::clone(&connection_set_needs_update);
-
     let (read_end, write_end) = match unistd::pipe() {
         Ok(tuple) => tuple,
         Err(_) => {
@@ -328,71 +325,93 @@ fn main() -> Result<(), io::Error> {
         }
     };
 
-    let (tx, rx) = mpsc::channel();
+    if !opts.headless {
+        let connection_set = Arc::new(Mutex::new(ConnectionSet::new()));
+        let connection_set_needs_update = Arc::new(AtomicBool::new(false));
 
-    let connection_set_ptr = connection_set.clone();
-    let canon_path = canon_path.clone();
-    let thd = thread::spawn(move || {
-        let _ = display(
-            canon_path.display(),
-            connection_set_ptr,
-            rx,
-            &needs_update_clone,
-            write_end,
-            opts,
-        );
-    });
+        let needs_update_clone = Arc::clone(&connection_set_needs_update);
 
-    let keys = thread::spawn(move || {
-        let stdin = io::stdin();
-        for evt in stdin.keys() {
-            if let Ok(key) = evt {
-                match key {
-                    Key::Ctrl('c') => {
-                        let _ = tx.send(ControlEvent::Quit);
-                        break;
-                    }
-                    Key::Char('q') => {
-                        let _ = tx.send(ControlEvent::Quit);
-                        break;
-                    }
-                    Key::Char('k') => {
-                        let _ = tx.send(ControlEvent::CloseAll);
-                    }
-                    Key::Char(' ') => {
-                        let _ = tx.send(ControlEvent::Toggle);
-                    }
-                    _ => {}
-                }
-            }
-        }
-    });
+        let (tx, rx) = mpsc::channel();
 
-    tui.run(read_end, move |connections| {
-        if connection_set_needs_update.load(Ordering::Acquire) {
-            let mut conn_set = connection_set.lock().unwrap();
-            conn_set.update(&connections);
-            loop {
-                match hist_rx.try_recv() {
-                    Ok(s) => {
-                        conn_set.history.push(s);
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        break;
+        let connection_set_ptr = connection_set.clone();
+        let canon_path = canon_path.clone();
+        let thd = thread::spawn(move || {
+            let _ = display(
+                canon_path.display(),
+                connection_set_ptr,
+                rx,
+                &needs_update_clone,
+                write_end,
+                opts,
+            );
+        });
+
+        let keys = thread::spawn(move || {
+            let stdin = io::stdin();
+            for evt in stdin.keys() {
+                if let Ok(key) = evt {
+                    match key {
+                        Key::Ctrl('c') => {
+                            let _ = tx.send(ControlEvent::Quit);
+                            break;
+                        }
+                        Key::Char('q') => {
+                            let _ = tx.send(ControlEvent::Quit);
+                            break;
+                        }
+                        Key::Char('k') => {
+                            let _ = tx.send(ControlEvent::CloseAll);
+                        }
+                        Key::Char(' ') => {
+                            let _ = tx.send(ControlEvent::Toggle);
+                        }
+                        _ => {}
                     }
                 }
             }
-            connection_set_needs_update.store(false, Ordering::Release);
-        }
-    });
+        });
 
-    let _ = unistd::close(read_end);
+        tui.run(read_end, move |connections| {
+            if connection_set_needs_update.load(Ordering::Acquire) {
+                let mut conn_set = connection_set.lock().unwrap();
+                conn_set.update(&connections);
+                loop {
+                    match hist_rx.try_recv() {
+                        Ok(s) => {
+                            conn_set.history.push(s);
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {
+                            break;
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            break;
+                        }
+                    }
+                }
+                connection_set_needs_update.store(false, Ordering::Release);
+            }
+        });
 
-    let _ = thd.join();
-    let _ = keys.join();
+        let _ = unistd::close(read_end);
+
+        let _ = thd.join();
+        let _ = keys.join();
+    } else {
+        tui.run(read_end, move |_connections| loop {
+            match hist_rx.try_recv() {
+                Ok(s) => {
+                    println!("hypershare: {}", s);
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    break;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    break;
+                }
+            }
+        });
+        let _ = unistd::close(read_end);
+    }
 
     Ok(())
 }
