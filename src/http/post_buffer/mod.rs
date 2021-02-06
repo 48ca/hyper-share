@@ -31,6 +31,7 @@ pub struct PostBuffer {
     dir: PathBuf,
     parse_idx: usize,
     queued_error: String,
+    new_files: Vec<String>,
 }
 
 impl PostBuffer {
@@ -51,10 +52,15 @@ impl PostBuffer {
             dir: dir,
             parse_idx: 0,
             queued_error: format!(""),
+            new_files: Vec::<String>::new(),
         };
         pb.buffer[..pb.fill_location].clone_from_slice(slice);
 
         pb
+    }
+
+    pub fn get_new_files(&self) -> &Vec<String> {
+        &self.new_files
     }
 
     pub fn get_open_slice(&mut self) -> &mut [u8] {
@@ -322,6 +328,8 @@ impl PostBuffer {
                     if filename.starts_with("\"") {
                         filename = &filename[1..filename.len() - 1];
                     }
+
+                    self.new_files.push(filename.to_string());
 
                     let real_filename = self.dir.join(filename);
 

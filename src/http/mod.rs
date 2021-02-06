@@ -395,9 +395,25 @@ impl HttpTui<'_> {
                 Some(HttpMethod::POST) => "POST",
                 None => "???",
             };
+            let pb_str = match &conn.post_buffer {
+                Some(pb) => {
+                    format!(
+                        "{}{}",
+                        if pb.get_new_files().len() > 0 {
+                            " files: "
+                        } else {
+                            ""
+                        },
+                        pb.get_new_files().join(", ")
+                    )
+                }
+                None => {
+                    format!("")
+                }
+            };
             let _ = self.history_channel.send(format!(
-                "{:<22} {} {:<4} {}",
-                ip_str, code_str, method_str, path_str
+                "{:<22} {} {:<4} {}{}",
+                ip_str, code_str, method_str, path_str, pb_str
             ));
         }
     }
@@ -483,6 +499,11 @@ impl HttpTui<'_> {
                 Some(format!("This server does not accept POST requests.")),
             ));
         }
+
+        // Returning an error in this function is questionable.
+        // Any browser making a real POST request will have its connection
+        // reset while sending its data over. They will receive the error
+        // message, but probably won't display it.
 
         let boundary = match get_post_boundary(req) {
             Some(b) => b,
