@@ -472,7 +472,7 @@ fn build_conn_span<'a>(
     let conn_s = build_conn_str(addr, conn);
     let speed_s = build_speed_str(conn);
 
-    if conn_s.len() + speed_s.len() + 1 <= term_width as usize {
+    if conn_s.len() + speed_s.len() + 1 <= (term_width - 4) as usize {
         vec![Spans::from(Span::raw(format!("{} {}", conn_s, speed_s)))]
     } else {
         vec![
