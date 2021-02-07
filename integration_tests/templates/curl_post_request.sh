@@ -2,13 +2,22 @@
 
 file="$1"
 
-output_file="dest.img"
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m' # No Color
 
-wget -o /dev/null -O "$DIR/$output_file" "http://localhost:$PORT/$file"
+CR=$(echo -ne '\r')
+
+# Not sure how to rename the file upon upload with curl, so
+# going to upload it to a subdirectory.
+mkdir -p $DIR/curl-upload
+output_file="curl-upload/$file"
+
+pushd $DIR > /dev/null
+
+output=$(curl --form "fileupload=@$file" http://localhost:$PORT/curl-upload)
+
+popd > /dev/null
 
 # echo "Comparing files"
 
@@ -24,6 +33,8 @@ else
     echo -e "${RED}Failed!!!${NC}"
     echo "Source: $res1"
     echo "Output: $res2"
+
+    echo "curl output: $output"
 fi
 
 rm "$DIR/$output_file"

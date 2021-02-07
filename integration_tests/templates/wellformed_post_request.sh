@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 CR=$(echo -ne '\r')
 
 (
-cat - $DIR/$file <(echo -en "\r\n--$BOUNDARY--") << EOF
+cat - "$DIR/$file" <(echo -en "\r\n--$BOUNDARY--") << EOF
 POST / HTTP/1.0$CR
 Host: localhost$CR
 Connection: close$CR
@@ -27,7 +27,7 @@ EOF
 
 # echo "Comparing files"
 
-res="$(md5sum $DIR/$file $DIR/$output_file | awk '{ print $1 }')"
+res="$(md5sum "$DIR/$file" "$DIR/$output_file" | awk '{ print $1 }')"
 
 res1=$(echo $res | awk '{ print $1 }')
 res2=$(echo $res | awk '{ print $2 }')
@@ -41,4 +41,4 @@ else
     echo "Output: $res2"
 fi
 
-rm $DIR/$output_file
+rm "$DIR/$output_file"
