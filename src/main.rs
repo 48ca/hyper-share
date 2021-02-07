@@ -338,14 +338,19 @@ fn main() -> Result<(), io::Error> {
         let connection_set_ptr = connection_set.clone();
         let canon_path = canon_path.clone();
         let thd = thread::spawn(move || {
-            let _ = display(
+            match display(
                 canon_path.display(),
                 connection_set_ptr,
                 rx,
                 &needs_update_clone,
                 write_end,
                 opts,
-            );
+            ) {
+                Err(e) => {
+                    eprintln!("Got io::Error while displaying: {}", e);
+                }
+                _ => {}
+            }
         });
 
         let keys = thread::spawn(move || {
@@ -419,14 +424,27 @@ fn main() -> Result<(), io::Error> {
     Ok(())
 }
 
-fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
+fn build_speed_str(conn: &mut Connection) -> String {
     let perc = if conn.bytes_requested == 0 {
         0
     } else {
         100 * conn.bytes_sent / conn.bytes_requested
     };
     let speed = conn.estimated_speed();
-    let mut ip_str = match addr {
+    let speed_str = format!(
+        "D:{sent}/{reqd}\t ({perc}% {speed} MiB/s) U:{upsent}",
+        sent = conn.bytes_sent,
+        reqd = conn.bytes_requested,
+        perc = perc,
+        speed = speed / (1024. * 1024.),
+        upsent = conn.bytes_read,
+    );
+
+    speed_str
+}
+
+fn build_conn_str(addr: &SocketAddr, conn: &mut Connection) -> String {
+    let ip_str = match addr {
         SocketAddr::V4(v4_addr) => {
             format!("{host}:{port}", host = v4_addr.ip(), port = v4_addr.port())
         }
@@ -438,20 +456,30 @@ fn build_str(addr: &SocketAddr, conn: &mut Connection) -> String {
             )
         }
     };
-    let info_str = format!(
-        " {uri} #{num} => Down: {sent}/{reqd}\t ({perc}% {speed} MiB/s) Up: {upsent}",
-        uri = conn.last_requested_uri,
-        num = conn.num_requests,
-        sent = conn.bytes_sent,
-        reqd = conn.bytes_requested,
-        perc = perc,
-        speed = speed / (1024. * 1024.),
-        upsent = conn.bytes_read,
-    );
 
-    ip_str.push_str(&info_str);
+    format!(
+        "{ip_req:<26} => {uri}",
+        ip_req = format!("{ip:<22} #{num}", ip = ip_str, num = conn.num_requests,),
+        uri = conn.last_requested_uri
+    )
+}
 
-    ip_str
+fn build_conn_span<'a>(
+    addr: &'a SocketAddr,
+    conn: &'a mut Connection,
+    term_width: u16,
+) -> Vec<Spans<'static>> {
+    let conn_s = build_conn_str(addr, conn);
+    let speed_s = build_speed_str(conn);
+
+    if conn_s.len() + speed_s.len() + 1 <= term_width as usize {
+        vec![Spans::from(Span::raw(format!("{} {}", conn_s, speed_s)))]
+    } else {
+        vec![
+            Spans::from(Span::raw(conn_s)),
+            Spans::from(Span::raw(format!(" >>> {}", speed_s))),
+        ]
+    }
 }
 
 fn display(
@@ -472,21 +500,23 @@ fn display(
     'outer: loop {
         // Print that the connection has been established
         {
+            let width = terminal.size()?.width;
             let conn_set = &mut connection_set.lock().unwrap();
-            let conns = &mut conn_set.connections;
+            let messages_connections: Vec<ListItem> = {
+                conn_set
+                    .connections
+                    .iter_mut()
+                    .map(|(addr, conn)| ListItem::new(build_conn_span(addr, conn, width)))
+                    .collect()
+            };
 
-            let messages_connections: Vec<ListItem> = conns
-                .iter_mut()
-                .map(|(addr, conn)| {
-                    ListItem::new(vec![Spans::from(Span::raw(build_str(addr, conn)))])
-                })
-                .collect();
-
-            let messages_history: Vec<ListItem> = conn_set
-                .history()
-                .iter()
-                .map(|s| ListItem::new(vec![Spans::from(Span::raw(s))]))
-                .collect();
+            let messages_history: Vec<ListItem> = {
+                conn_set
+                    .history()
+                    .iter()
+                    .map(|s| ListItem::new(vec![Spans::from(Span::raw(s))]))
+                    .collect()
+            };
 
             terminal.draw(|f| {
                 let chunks = Layout::default()
