@@ -178,13 +178,13 @@ fn get_byte_from_hex(tens_dig: u8, ones_dig: u8) -> u8 {
     fn get_byte_from_hex_digit(dig: u8) -> u8 {
         match dig as char {
             '0'..='9' => dig - b'0',
-            'a'..='z' => dig - b'a' + 10,
-            'A'..='Z' => dig - b'A' + 10,
+            'a'..='f' => dig - b'a' + 10,
+            'A'..='F' => dig - b'A' + 10,
             _ => panic!("get_byte_from_hex failed: {} = `{}`", dig, dig as char),
         }
     }
 
-    get_byte_from_hex_digit(tens_dig) << 4 + get_byte_from_hex_digit(ones_dig)
+    (get_byte_from_hex_digit(tens_dig) << 4) + get_byte_from_hex_digit(ones_dig)
 }
 
 fn undo_percent_encoding(path: &str) -> String {
