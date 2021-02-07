@@ -35,6 +35,7 @@ pub const BUFFER_SIZE: usize = 512 * 1024;
 
 #[derive(PartialEq, Clone)]
 pub enum HttpStatus {
+    Continue,                // 100
     OK,                      // 200
     Created,                 // 201
     PartialContent,          // 206
@@ -51,6 +52,7 @@ pub enum HttpStatus {
 
 pub fn status_to_code(status: &HttpStatus) -> u16 {
     match status {
+        HttpStatus::Continue => 100,
         HttpStatus::OK => 200,
         HttpStatus::Created => 201,
         HttpStatus::PartialContent => 206,
@@ -68,6 +70,7 @@ pub fn status_to_code(status: &HttpStatus) -> u16 {
 
 pub fn status_to_message(status: &HttpStatus) -> &'static str {
     match status {
+        HttpStatus::Continue => "Continue",
         HttpStatus::OK => "OK",
         HttpStatus::Created => "Created",
         HttpStatus::PartialContent => "Partial Content",

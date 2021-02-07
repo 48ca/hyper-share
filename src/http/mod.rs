@@ -439,7 +439,7 @@ impl HttpTui<'_> {
 
         if state == ConnectionState::WritingResponse {
             // Force an initial write of the data
-            self.write_partial_response(conn)
+            self.write_partial_final_response(conn)
         } else {
             Ok(state)
         }
@@ -764,7 +764,7 @@ impl HttpTui<'_> {
                 return self.create_oneoff_response(http_status, conn, msg);
             }
             HttpResult::ReadRequestBody => {
-                return self.check_partial_post_body(conn);
+                return self.check_partial_post_body_initial(&req, conn);
             }
             HttpResult::Response(resp, range) => (resp, range),
         };
@@ -792,20 +792,17 @@ impl HttpTui<'_> {
         Ok(ConnectionState::WritingResponse)
     }
 
-    fn write_partial_response(
+    fn write_continue(&self, conn: &mut HttpConnection) -> Result<(), io::Error> {
+        let mut resp = HttpResponse::new(HttpStatus::Continue, &HttpVersion::Http1_1);
+        resp.write_headers_to_stream(&conn.stream)?;
+        Ok(())
+    }
+
+    fn write_partial_final_response(
         &self,
         conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
-        let done = match &mut conn.response {
-            Some(ref mut resp) => {
-                let amt_written = resp.partial_write_to_stream(&conn.stream)?;
-                conn.bytes_sent += amt_written;
-                // If we wrote nothing, we are done
-                amt_written == 0 || conn.bytes_sent >= conn.bytes_requested
-            }
-            None => true,
-        };
-
+        let done = self.write_partial_response(conn)?;
         if done {
             if conn.keep_alive {
                 // Reset the data associated with this connection
@@ -817,6 +814,18 @@ impl HttpTui<'_> {
         }
 
         Ok(ConnectionState::WritingResponse)
+    }
+
+    fn write_partial_response(&self, conn: &mut HttpConnection) -> Result<bool, io::Error> {
+        Ok(match &mut conn.response {
+            Some(ref mut resp) => {
+                let amt_written = resp.partial_write_to_stream(&conn.stream)?;
+                conn.bytes_sent += amt_written;
+                // If we wrote nothing, we are done
+                amt_written == 0 || conn.bytes_sent >= conn.bytes_requested
+            }
+            None => true,
+        })
     }
 
     fn create_http_connection(stream: TcpStream) -> HttpConnection {
@@ -836,6 +845,45 @@ impl HttpTui<'_> {
                 }
             }
             _ => Ok(()),
+        }
+    }
+
+    fn check_partial_post_body_initial(
+        &self,
+        req: &HttpRequest,
+        conn: &mut HttpConnection,
+    ) -> Result<ConnectionState, io::Error> {
+        let pb = &mut conn.post_buffer.as_mut().unwrap();
+
+        if req.version == HttpVersion::Http1_1
+            && req.get_header("expect").unwrap_or(&"".to_string()) == "100-continue"
+        {
+            // Call handle_new_data directly so that errors are not
+            // suppressed.
+            match pb.handle_new_data() {
+                Ok(done) => {
+                    if done {
+                        self.create_oneoff_response(
+                            HttpStatus::Created,
+                            conn,
+                            Some(format!("File received.")),
+                        )
+                    } else {
+                        self.write_continue(conn)?;
+                        Ok(ConnectionState::ReadingPostBody)
+                    }
+                }
+                Err(s) => {
+                    conn.keep_alive = false;
+                    self.create_oneoff_response(
+                        HttpStatus::ServerError,
+                        conn,
+                        Some(format!("Error while parsing POST request: {}", s)),
+                    )
+                }
+            }
+        } else {
+            self.check_partial_post_body(conn)
         }
     }
 
@@ -920,7 +968,7 @@ impl HttpTui<'_> {
                 conn.state = self.read_partial_post_body(conn)?;
             }
             ConnectionState::WritingResponse => {
-                conn.state = self.write_partial_response(conn)?;
+                conn.state = self.write_partial_final_response(conn)?;
             }
             ConnectionState::Closing => {}
         }
