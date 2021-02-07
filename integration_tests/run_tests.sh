@@ -79,6 +79,23 @@ templates/wellformed_post_request.sh test_small.img || errored
 echo "TEST: Small file with expectation... "
 templates/wellformed_post_request_with_continue.sh test_small.img || errored
 
+echo -e "\n.... GET + POST Requests (curl/wget) ...."
+
+echo "TEST: 1M file... "
+templates/curl_wget_twoway.sh test_1m.img || errored
+
+echo "TEST: 512M file... "
+templates/curl_wget_twoway.sh test_512m.img || errored
+
+echo "TEST: 0B file... "
+templates/curl_wget_twoway.sh test_0b.img || errored
+
+echo "TEST: Small file... "
+templates/curl_wget_twoway.sh test_small.img || errored
+
+echo "TEST: File with spaces... "
+templates/curl_wget_twoway.sh "file with spaces and %s" || errored
+
 echo -e "...................................\n"
 echo "Killing hypershare and cleaning up"
 
