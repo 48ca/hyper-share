@@ -152,12 +152,17 @@ pub fn display(
                         }
                     )))]),
                     ListItem::new(vec![Spans::from(Span::raw(format!(
-                        "Uploading: {}",
+                        "Uploading: {}{}",
                         if opts.uploading_enabled {
                             "Enabled"
                         } else {
                             "Disabled"
                         },
+                        if opts.size_limit > 0 && opts.uploading_enabled {
+                            format!(" (limit: {})", opts.size_limit)
+                        } else {
+                            format!("")
+                        }
                     )))]),
                     ListItem::new(vec![Spans::from(Span::raw(format!(
                         "Status: {}",
