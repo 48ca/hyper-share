@@ -4,6 +4,17 @@ Kind of like OnionShare but for normal people: an interactive HTTP server that c
 
 It has been designed to be used with basically any web browser. Users don't need special software to upload or download files.
 
+## Install
+
+You can install this package like any other standard Rust package:
+```shell
+$ git clone https://github.com/48ca/hypershare && cd hypershare
+$ cargo install --path .
+```
+
+### Arch Linux
+This package is on the AUR as [`hypershare-git`](https://aur.archlinux.org/packages/hypershare-git) for Arch Linux users.
+
 ## Why?
 
 So you want to send a file to someone, but you can't or don't want to put the file on a cloud storage system. You could use nginx, SimpleHTTPServer, or some other HTTP, SSH, or FTP server, but most of your choices are either too large, too complicated, or don't implement enough of their respective protocol to be useful. Also, basically NONE of them gives you the option to inspect connections as they are served.
