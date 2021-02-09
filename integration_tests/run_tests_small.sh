@@ -12,7 +12,7 @@ export BOUNDARY="aaaaaaaaaaaaaaaaaaaa" # 20 a's
 echo "Starting hypershare"
 
 cargo build
-cargo run -- -d $DIR -p $PORT -h "127.0.0.1" -u --headless | sed -e 's/^/ >>> hypershare: /g' &
+cargo run -- -d $DIR -p $PORT -m "127.0.0.1" -u --headless | sed -e 's/^/ >>> hypershare: /g' &
 
 sleep 1
 
