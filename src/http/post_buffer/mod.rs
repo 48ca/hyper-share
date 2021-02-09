@@ -8,8 +8,7 @@ use core::ptr::copy;
 
 use boyer_moore_magiclen::BMByte;
 
-use crate::http::boyer_moore::find_body_start;
-use crate::http::boyer_moore::types::BMBuf;
+use crate::http::boyer_moore::{find_body_start, types::BMBuf};
 
 const POST_BUFFER_SIZE: usize = 32 * 1024 * 1024;
 
@@ -59,9 +58,7 @@ impl PostBuffer {
         pb
     }
 
-    pub fn get_new_files(&self) -> &Vec<String> {
-        &self.new_files
-    }
+    pub fn get_new_files(&self) -> &Vec<String> { &self.new_files }
 
     pub fn read_into_buffer<T>(&mut self, readable: &mut T) -> Result<usize, io::Error>
     where

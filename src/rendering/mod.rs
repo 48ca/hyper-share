@@ -1,8 +1,6 @@
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
-use std::collections::HashMap;
-use std::io::Read;
+use std::{collections::HashMap, io::Read};
 
 use crate::http::http_core;
 
@@ -40,9 +38,7 @@ impl HtmlElement {
         }
     }
 
-    pub fn add_text(&mut self, text: String) {
-        self.text = Some(text);
-    }
+    pub fn add_text(&mut self, text: String) { self.text = Some(text); }
 
     pub fn add_child(&mut self, child: HtmlElement) {
         match &mut self.children {
@@ -57,9 +53,7 @@ impl HtmlElement {
         self.attributes.push((key, value));
     }
 
-    pub fn add_class(&mut self, class: &'static str) {
-        self.classes.push(class);
-    }
+    pub fn add_class(&mut self, class: &'static str) { self.classes.push(class); }
 
     pub fn render(&self) -> String {
         let attributes = if self.attributes.len() > 0 {

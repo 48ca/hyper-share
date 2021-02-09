@@ -1,10 +1,7 @@
 extern crate regex;
 use regex::{Captures, Regex};
 
-use std::boxed::Box;
-use std::cmp::min;
-use std::io;
-use std::net::TcpStream;
+use std::{boxed::Box, cmp::min, io, net::TcpStream};
 
 use std::io::Write;
 
@@ -207,7 +204,6 @@ pub struct HttpResponse {
     version: HttpVersion,
     headers: HttpHeaderSet,
     headers_written: bool,
-    last_write_length: usize,
     data: ResponseDataType,
     buffer: Box<[u8]>,
     bytes_to_write: usize,
@@ -220,7 +216,6 @@ impl HttpResponse {
             version: version.clone(),
             headers: HttpHeaderSet::new(),
             headers_written: false,
-            last_write_length: BUFFER_SIZE,
             buffer: {
                 let mut v: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
                 unsafe {
@@ -233,13 +228,9 @@ impl HttpResponse {
         }
     }
 
-    pub fn add_body(&mut self, data: ResponseDataType) {
-        self.data = data;
-    }
+    pub fn add_body(&mut self, data: ResponseDataType) { self.data = data; }
 
-    pub fn clear_body(&mut self) {
-        self.data = ResponseDataType::None;
-    }
+    pub fn clear_body(&mut self) { self.data = ResponseDataType::None; }
 
     pub fn add_header(&mut self, key: String, value: String) {
         self.headers.push(HttpHeader {
@@ -256,9 +247,7 @@ impl HttpResponse {
         self.bytes_to_write = size;
     }
 
-    pub fn get_code(&self) -> String {
-        status_to_code(&self.status).to_string()
-    }
+    pub fn get_code(&self) -> String { status_to_code(&self.status).to_string() }
 
     pub fn write_headers_to_stream(&mut self, mut stream: &TcpStream) -> Result<(), io::Error> {
         assert_eq!(self.headers_written, false);
@@ -303,7 +292,6 @@ impl HttpResponse {
         };
 
         if let Ok(amt) = amt_written {
-            self.last_write_length = amt;
             self.bytes_to_write -= amt;
         }
 
@@ -321,7 +309,6 @@ where
     T: io::Seek + io::Read,
 {
     let write_length = min(bytes_to_write, BUFFER_SIZE);
-    // let write_length = min(self.last_write_length + 4096, BUFFER_SIZE);
     let amt_read = body.read(&mut buffer[..write_length])?;
     if amt_read == 0 {
         return Ok(0);

@@ -1,5 +1,7 @@
-use std::fs;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::{
+    fs,
+    io::{self, Read, Seek, SeekFrom},
+};
 
 pub struct SeekableString {
     pub start: usize,
@@ -7,9 +9,7 @@ pub struct SeekableString {
 }
 
 impl SeekableString {
-    pub fn new(d: String) -> SeekableString {
-        SeekableString { start: 0, data: d }
-    }
+    pub fn new(d: String) -> SeekableString { SeekableString { start: 0, data: d } }
 }
 
 impl Read for SeekableString {

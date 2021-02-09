@@ -8,9 +8,7 @@ use nix::unistd;
 
 use std::path::PathBuf;
 
-use std::net::SocketAddr;
-use std::net::TcpListener;
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use std::cmp::{max, min};
 
@@ -25,15 +23,16 @@ use std::format;
 use std::collections::HashMap;
 
 use nix::sys::select::{select, FdSet};
-use std::os::unix::io::AsRawFd;
-use std::os::unix::prelude::RawFd;
+use std::os::unix::{io::AsRawFd, prelude::RawFd};
 
 use std::sync::mpsc;
 
 use std::path::Path;
 
-use http_core::types::{ResponseDataType, SeekableString};
-use http_core::{HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion};
+use http_core::{
+    types::{ResponseDataType, SeekableString},
+    HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion,
+};
 
 use crate::rendering;
 
@@ -333,7 +332,8 @@ impl HttpTui<'_> {
                         assert_eq!(connections[&fd].state, ConnectionState::WritingResponse);
                         match self.handle_conn_sigpipe(&mut connections.get_mut(&fd).unwrap()) {
                             Ok(_) => {}
-                            _ => {} // Err(error) => { write_error(format!("Server error while writing: {}", error)); }
+                            _ => {} /* Err(error) => { write_error(format!("Server error while
+                                     * writing: {}", error)); } */
                         }
                     }
                 }
@@ -721,8 +721,15 @@ impl HttpTui<'_> {
 
         if self.disabled {
             conn.keep_alive = false;
-            return self.create_oneoff_response(HttpStatus::ServiceUnavailable,
-                                              conn, Some("This server has been temporarily disabled. Please contact the administrator to re-enable it.".to_string()));
+            return self.create_oneoff_response(
+                HttpStatus::ServiceUnavailable,
+                conn,
+                Some(
+                    "This server has been temporarily disabled. Please contact the administrator \
+                     to re-enable it."
+                        .to_string(),
+                ),
+            );
         }
 
         // Check if keep-alive header was given in the request.
@@ -825,9 +832,7 @@ impl HttpTui<'_> {
         })
     }
 
-    fn create_http_connection(stream: TcpStream) -> HttpConnection {
-        HttpConnection::new(stream)
-    }
+    fn create_http_connection(stream: TcpStream) -> HttpConnection { HttpConnection::new(stream) }
 
     fn handle_conn_sigpipe(&self, conn: &mut HttpConnection) -> Result<(), io::Error> {
         match self.handle_conn(conn) {

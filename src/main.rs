@@ -6,29 +6,31 @@ mod rendering;
 
 use clap::Clap;
 
-use std::fs::canonicalize;
-use std::path::{Display, Path};
+use std::{
+    fs::canonicalize,
+    path::{Display, Path},
+};
 
 use std::io;
-use termion::event::Key;
-use termion::input::TermRead;
-use termion::raw::IntoRawMode;
-use termion::screen::AlternateScreen;
-use tui::backend::TermionBackend;
-use tui::layout::{Constraint, Direction, Layout};
-use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, List, ListItem};
-use tui::Terminal;
+use termion::{event::Key, input::TermRead, raw::IntoRawMode, screen::AlternateScreen};
+use tui::{
+    backend::TermionBackend,
+    layout::{Constraint, Direction, Layout},
+    text::{Span, Spans},
+    widgets::{Block, Borders, List, ListItem},
+    Terminal,
+};
 
 use std::collections::HashMap;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 use std::sync::mpsc;
 
-use std::thread;
-use std::time;
+use std::{thread, time};
 
 use http::{HttpConnection, HttpTui};
 
@@ -52,7 +54,8 @@ struct Opts {
     disable_directory_listings: bool,
     #[clap(
         long = "start-disabled",
-        about = "Start the server as disabled. Files will not be served until the server is enabled."
+        about = "Start the server as disabled. Files will not be served until the server is \
+                 enabled."
     )]
     start_disabled: bool,
     #[clap(
@@ -84,9 +87,7 @@ impl ConnectionSpeedMeasurement {
         self.ind = (self.ind + 1) % 3;
     }
 
-    pub fn get_avg(&self) -> f32 {
-        return (self.speeds[0] + self.speeds[1] + self.speeds[2]) / 3.;
-    }
+    pub fn get_avg(&self) -> f32 { return (self.speeds[0] + self.speeds[1] + self.speeds[2]) / 3.; }
 }
 
 struct Connection {
@@ -168,9 +169,7 @@ impl History {
         self.history_idx = (self.history_idx + 1) % 50;
     }
 
-    pub fn iter<'a>(&'a self) -> HistoryIterator<'a> {
-        HistoryIterator::new(self)
-    }
+    pub fn iter<'a>(&'a self) -> HistoryIterator<'a> { HistoryIterator::new(self) }
 
     pub fn get_idx(&self) -> usize {
         if self.history_idx == 0 {
@@ -180,13 +179,9 @@ impl History {
         }
     }
 
-    pub fn get(&self, i: usize) -> &Option<String> {
-        &self.history[i]
-    }
+    pub fn get(&self, i: usize) -> &Option<String> { &self.history[i] }
 
-    pub fn capacity(&self) -> usize {
-        self.history.len()
-    }
+    pub fn capacity(&self) -> usize { self.history.len() }
 }
 
 struct HistoryIterator<'a> {
@@ -248,9 +243,7 @@ impl ConnectionSet {
         }
     }
 
-    pub fn history(&self) -> &History {
-        &self.history
-    }
+    pub fn history(&self) -> &History { &self.history }
 
     pub fn update(&mut self, current_conns: &HashMap<i32, HttpConnection>) {
         let mut reindexed = HashMap::<SocketAddr, &HttpConnection>::new();
