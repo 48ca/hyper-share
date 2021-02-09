@@ -32,7 +32,7 @@ HyperShare supports various modes of operation. See `hypershare --help` for more
 
 ### Defaults
 
-HyperShare will listen on `127.0.0.1:80` and serve your current working directory by default.
+HyperShare will listen on `0.0.0.0:80` and serve your current working directory by default.
 
 ### Uploading
 

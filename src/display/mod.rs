@@ -141,7 +141,7 @@ pub fn display(
                     )))]),
                     ListItem::new(vec![Spans::from(Span::raw(format!(
                         "Listening on {}:{}",
-                        opts.host, opts.port
+                        opts.hostmask, opts.port
                     )))]),
                     ListItem::new(vec![Spans::from(Span::raw(format!(
                         "Directory listings: {}",

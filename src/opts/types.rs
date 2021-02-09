@@ -7,11 +7,11 @@ pub struct Opts {
     pub directory: String,
     #[clap(short, long, default_value = "80")]
     pub port: u16,
-    #[clap(short, long, default_value = "127.0.0.1")]
-    pub host: String,
-    #[clap(short, long = "upload", about = "Enable uploading capabilities.")]
+    #[clap(short = 'm', long, default_value = "0.0.0.0")]
+    pub hostmask: String,
+    #[clap(short, long = "upload", about = "Enable uploading capabilities")]
     pub uploading_enabled: bool,
-    #[clap(long = "nodirs", about = "Disable directory listings.")]
+    #[clap(long = "nodirs", about = "Disable directory listings")]
     pub disable_directory_listings: bool,
     #[clap(
         long = "start-disabled",
@@ -23,9 +23,9 @@ pub struct Opts {
         short = 'r',
         long = "ui-refresh-rate",
         default_value = "100",
-        about = "In milliseconds, how often the UI will be updated."
+        about = "In milliseconds, how often the UI will be updated"
     )]
     pub ui_refresh_rate: u64,
-    #[clap(long, about = "Do not start the interface (useful for testing).")]
+    #[clap(long, about = "Do not start the interface (useful for testing)")]
     pub headless: bool,
 }

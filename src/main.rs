@@ -39,10 +39,17 @@ fn main() -> Result<(), io::Error> {
         }
     };
 
+    if opts.start_disabled && opts.headless {
+        println!(
+            "Warning: --start-disabled and --headless have both been specified. The server will \
+             remain disabled, as there is no way to enable it while running headless."
+        );
+    }
+
     let (hist_tx, hist_rx) = mpsc::channel();
 
     let mut tui = match HttpTui::new(
-        &opts.host,
+        &opts.hostmask,
         opts.port,
         &canon_path.as_path(),
         hist_tx,
@@ -142,7 +149,7 @@ fn main() -> Result<(), io::Error> {
         let _ = thd.join();
         let _ = keys.join();
     } else {
-        println!("Listening on {}:{}", opts.host, opts.port);
+        println!("Listening on {}:{}", opts.hostmask, opts.port);
         tui.run(read_end, move |_connections| loop {
             match hist_rx.try_recv() {
                 Ok(s) => {
