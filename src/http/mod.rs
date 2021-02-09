@@ -191,6 +191,7 @@ pub struct HttpTui<'a> {
     dir_listings: bool,
     disabled: bool,
     uploading: bool,
+    upload_size_limit: usize,
 }
 
 impl HttpTui<'_> {
@@ -202,6 +203,7 @@ impl HttpTui<'_> {
         dir_listings: bool,
         disabled: bool,
         uploading: bool,
+        upload_size_limit: usize,
     ) -> Result<HttpTui<'a>, io::Error> {
         let listener = TcpListener::bind(format!("{mask}:{port}", mask = host, port = port))?;
         Ok(HttpTui {
@@ -211,6 +213,7 @@ impl HttpTui<'_> {
             dir_listings: dir_listings,
             disabled: disabled,
             uploading: uploading,
+            upload_size_limit: upload_size_limit,
         })
     }
 
@@ -552,6 +555,7 @@ impl HttpTui<'_> {
             post_delimeter,
             real_boundary,
             &conn.buffer[conn.body_start_location..conn.bytes_read],
+            self.upload_size_limit,
         );
 
         conn.post_buffer = Some(pb);
@@ -871,12 +875,15 @@ impl HttpTui<'_> {
                         Ok(ConnectionState::ReadingPostBody)
                     }
                 }
-                Err(s) => {
+                Err(e) => {
                     conn.keep_alive = false;
                     self.create_oneoff_response(
-                        HttpStatus::ServerError,
+                        e.get_code(),
                         conn,
-                        Some(format!("Error while parsing POST request: {}", s)),
+                        Some(format!(
+                            "Error while processing POST request: {}",
+                            e.get_reason()
+                        )),
                     )
                 }
             }
@@ -902,12 +909,15 @@ impl HttpTui<'_> {
                     Ok(ConnectionState::ReadingPostBody)
                 }
             }
-            Err(s) => {
+            Err(e) => {
                 conn.keep_alive = false;
                 self.create_oneoff_response(
-                    HttpStatus::ServerError,
+                    e.get_code(),
                     conn,
-                    Some(format!("Error while parsing POST request: {}", s)),
+                    Some(format!(
+                        "Error while processing POST request: {}",
+                        e.get_reason()
+                    )),
                 )
             }
         }
@@ -981,7 +991,7 @@ impl HttpTui<'_> {
         msg: Option<String>,
     ) -> Result<ConnectionState, io::Error> {
         let body: String = rendering::render_error(&status, msg);
-        let mut resp = HttpResponse::new(status.clone(), &HttpVersion::Http1_1);
+        let mut resp = HttpResponse::new(status, &HttpVersion::Http1_1);
         resp.add_header("Server".to_string(), "hypershare".to_string());
 
         resp.set_content_length(body.len());

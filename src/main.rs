@@ -56,6 +56,7 @@ fn main() -> Result<(), io::Error> {
         !opts.disable_directory_listings,
         opts.start_disabled,
         opts.uploading_enabled,
+        opts.size_limit,
     ) {
         Ok(tui) => tui,
         Err(e) => {

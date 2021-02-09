@@ -1,3 +1,9 @@
+mod types;
+
+use types::PostBufferError;
+
+use crate::http::http_core::HttpStatus;
+
 use std::fs::{self, OpenOptions};
 
 use std::io::{self, Write};
@@ -25,16 +31,25 @@ pub struct PostBuffer {
     buffer: Box<[u8]>,
     post_delimeter: BMByte,
     post_delimeter_string: String,
+    current_filename: Option<PathBuf>,
     current_file: Option<fs::File>,
     state: PostRequestState,
     dir: PathBuf,
     parse_idx: usize,
-    queued_error: String,
+    queued_error: PostBufferError,
     new_files: Vec<String>,
+    total_written: usize,
+    size_limit: usize,
 }
 
 impl PostBuffer {
-    pub fn new(dir: PathBuf, delim: BMByte, delim_str: String, slice: &[u8]) -> PostBuffer {
+    pub fn new(
+        dir: PathBuf,
+        delim: BMByte,
+        delim_str: String,
+        slice: &[u8],
+        size_limit: usize,
+    ) -> PostBuffer {
         let mut pb = PostBuffer {
             buffer: {
                 let mut v: Vec<u8> = Vec::with_capacity(POST_BUFFER_SIZE);
@@ -46,14 +61,18 @@ impl PostBuffer {
             fill_location: slice.len(),
             post_delimeter: delim,
             post_delimeter_string: delim_str,
+            current_filename: None,
             current_file: None,
             state: PostRequestState::AwaitingFirstBody,
             dir: dir,
             parse_idx: 0,
-            queued_error: format!(""),
+            queued_error: PostBufferError::no_error(),
             new_files: Vec::<String>::new(),
+            total_written: 0,
+            size_limit: size_limit,
         };
         pb.buffer[..pb.fill_location].clone_from_slice(slice);
+        pb.total_written += pb.fill_location;
 
         pb
     }
@@ -80,13 +99,17 @@ impl PostBuffer {
         }
     }
 
-    fn write_to_file_final(&mut self, limit: usize) -> Result<(), String> {
+    fn write_to_file_final(&mut self, limit: usize) -> Result<(), PostBufferError> {
         if self.current_file.is_none() {
-            return Err("Attempted to write to a file before opening it.".to_string());
+            return Err(PostBufferError::server_error(
+                "Attempted to write to a file before opening it.".to_string(),
+            ));
         }
 
         if self.fill_location < limit {
-            return Err("Asked to write more than avaiable".to_string());
+            return Err(PostBufferError::server_error(
+                "Asked to write more than avaiable".to_string(),
+            ));
         }
 
         self.write_and_shuffle(limit)?;
@@ -120,11 +143,19 @@ impl PostBuffer {
         self.fill_location = remain;
     }
 
-    fn write_and_shuffle(&mut self, up_to: usize) -> Result<(), String> {
+    fn write_and_shuffle(&mut self, up_to: usize) -> Result<(), PostBufferError> {
         if up_to <= self.parse_idx {
             // Need to read more before this can occur
             return Ok(());
         }
+
+        if self.size_limit > 0 && self.total_written + up_to - self.parse_idx > self.size_limit {
+            return Err(PostBufferError::new(
+                HttpStatus::PayloadTooLarge,
+                format!("Upload size limit of {} bytes exceeded", self.size_limit),
+            ));
+        }
+
         let written = match self
             .current_file
             .as_ref()
@@ -133,11 +164,14 @@ impl PostBuffer {
         {
             Ok(size) => size,
             Err(_) => {
-                return Err("Error writing to file.".to_string());
+                return Err(PostBufferError::server_error(
+                    "Error writing to file.".to_string(),
+                ));
             }
         };
 
         self.parse_idx += written;
+        self.total_written += written;
 
         let amount_remaining: usize = self.fill_location - self.parse_idx;
 
@@ -146,13 +180,17 @@ impl PostBuffer {
         Ok(())
     }
 
-    fn send_buffer_data_to_file(&mut self, limit: usize) -> Result<(), String> {
+    fn send_buffer_data_to_file(&mut self, limit: usize) -> Result<(), PostBufferError> {
         if self.current_file.is_none() {
-            return Err("Attempted to write to a file before opening it.".to_string());
+            return Err(PostBufferError::server_error(
+                "Attempted to write to a file before opening it.".to_string(),
+            ));
         }
 
         if limit < self.post_delimeter_string.len() {
-            return Err("Not enough data to write anything.".to_string());
+            return Err(PostBufferError::server_error(
+                "Not enough data to write anything.".to_string(),
+            ));
         }
 
         // Don't write the last few bytes. An incomplete delimeter could be here.
@@ -177,7 +215,7 @@ impl PostBuffer {
      * with no error message (although one is sent before the reset, browsers
      * won't display it), call `handle_new_data()` directly.
      */
-    pub fn handle_new_data_queue_error(&mut self) -> Result<bool, String> {
+    pub fn handle_new_data_queue_error(&mut self) -> Result<bool, PostBufferError> {
         loop {
             match self.handle_new_data() {
                 Ok(done) => {
@@ -189,13 +227,33 @@ impl PostBuffer {
                 }
                 Err(s) => {
                     self.state = PostRequestState::DiscardingData;
-                    self.queued_error = format!("{} * {}", self.queued_error, s);
+                    self.queued_error.add_error(&s);
                 }
             }
         }
     }
 
-    pub fn handle_new_data(&mut self) -> Result<bool, String> {
+    // `handle_new_data_raw` wrapper that will delete the current file
+    // when an error occurs.
+    pub fn handle_new_data(&mut self) -> Result<bool, PostBufferError> {
+        let mut res = self.handle_new_data_raw();
+        match res {
+            Ok(_) => {}
+            Err(ref mut e) => {
+                if let Some(ref s) = self.current_filename {
+                    if let Err(io_e) = fs::remove_file(s) {
+                        e.add_error(&PostBufferError::server_error(format!("{:?}", io_e)));
+                    }
+                }
+            }
+        };
+        self.current_filename = None;
+        self.current_file = None; // close if open
+
+        res
+    }
+
+    pub fn handle_new_data_raw(&mut self) -> Result<bool, PostBufferError> {
         // Where parsing should begin
         loop {
             match self.state {
@@ -257,9 +315,10 @@ impl PostBuffer {
                         }
                         Some(idx) => {
                             if idx < 2 {
-                                return Err(
-                                    "No CRLF before delimeter. Malformed request.".to_string()
-                                );
+                                return Err(PostBufferError::new(
+                                    HttpStatus::BadRequest,
+                                    "No CRLF before delimeter. Malformed request.".to_string(),
+                                ));
                             }
                             idx - 2
                         }
@@ -297,9 +356,9 @@ impl PostBuffer {
                         }
                     }
                     if info == "" {
-                        return Err(format!(
-                            "Did not receive a Content-Disposition:\n{}",
-                            meta_str
+                        return Err(PostBufferError::new(
+                            HttpStatus::UnprocessableEntity,
+                            format!("Did not receive a Content-Disposition:\n{}", meta_str),
                         ));
                     }
 
@@ -316,11 +375,17 @@ impl PostBuffer {
                     }
 
                     if filename == "" {
-                        return Err("Could not find attribute with a filename".to_string());
+                        return Err(PostBufferError::new(
+                            HttpStatus::UnprocessableEntity,
+                            "Could not find attribute with a filename".to_string(),
+                        ));
                     }
 
                     if filename.contains("/") {
-                        return Err(format!("Invalid filename: {}", filename));
+                        return Err(PostBufferError::new(
+                            HttpStatus::UnprocessableEntity,
+                            format!("Invalid filename: {}", filename),
+                        ));
                     }
 
                     if filename.starts_with("\"") {
@@ -335,14 +400,20 @@ impl PostBuffer {
                         match OpenOptions::new()
                             .write(true)
                             .create_new(true)
-                            .open(real_filename)
+                            .open(&real_filename)
                         {
                             Ok(f) => f,
                             _ => {
-                                return Err("Could not open file for writing.".to_string());
+                                return Err(PostBufferError::server_error(
+                                    "Could not open file for writing. If the file already exists, \
+                                     please use a different name."
+                                        .to_string(),
+                                ));
                             }
                         },
                     );
+
+                    self.current_filename = Some(real_filename);
 
                     self.state = PostRequestState::AwaitingBody;
 

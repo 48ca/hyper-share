@@ -28,4 +28,10 @@ pub struct Opts {
     pub ui_refresh_rate: u64,
     #[clap(long, about = "Do not start the interface (useful for testing)")]
     pub headless: bool,
+    #[clap(
+        long = "upload-size-limit",
+        about = "Uploaded file size limit in bytes. Specify 0 for no limit.",
+        default_value = "0"
+    )]
+    pub size_limit: usize,
 }

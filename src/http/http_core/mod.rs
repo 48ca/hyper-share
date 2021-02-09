@@ -30,7 +30,7 @@ pub fn version_to_str(v: &HttpVersion) -> &'static str {
 
 pub const BUFFER_SIZE: usize = 512 * 1024;
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum HttpStatus {
     Continue,                // 100
     OK,                      // 200
@@ -40,6 +40,8 @@ pub enum HttpStatus {
     PermissionDenied,        // 403
     NotFound,                // 404
     MethodNotAllowed,        // 405
+    PayloadTooLarge,         // 413
+    UnprocessableEntity,     // 422
     RequestHeadersTooLarge,  // 431
     ServerError,             // 500
     NotImplemented,          // 501
@@ -57,6 +59,8 @@ pub fn status_to_code(status: &HttpStatus) -> u16 {
         HttpStatus::PermissionDenied => 403,
         HttpStatus::NotFound => 404,
         HttpStatus::MethodNotAllowed => 405,
+        HttpStatus::PayloadTooLarge => 413,
+        HttpStatus::UnprocessableEntity => 422,
         HttpStatus::RequestHeadersTooLarge => 431,
         HttpStatus::ServerError => 500,
         HttpStatus::NotImplemented => 501,
@@ -70,11 +74,13 @@ pub fn status_to_message(status: &HttpStatus) -> &'static str {
         HttpStatus::Continue => "Continue",
         HttpStatus::OK => "OK",
         HttpStatus::Created => "Created",
-        HttpStatus::PartialContent => "Partial Content",
+        HttpStatus::PartialContent => "Partial content",
         HttpStatus::BadRequest => "Bad request",
         HttpStatus::PermissionDenied => "Permission denied",
         HttpStatus::NotFound => "Not found",
         HttpStatus::MethodNotAllowed => "Method not allowed",
+        HttpStatus::PayloadTooLarge => "Payload too large",
+        HttpStatus::UnprocessableEntity => "Unprocessable entity",
         HttpStatus::RequestHeadersTooLarge => "Request header fields too large",
         HttpStatus::ServerError => "Server error",
         HttpStatus::NotImplemented => "Method not implemented",
