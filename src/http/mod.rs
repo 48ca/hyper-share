@@ -2,41 +2,37 @@ mod boyer_moore;
 pub mod http_core;
 mod post_buffer;
 
+use boyer_moore_magiclen::BMByte;
+
+use crate::rendering;
 use post_buffer::PostBuffer;
-
-use nix::unistd;
-
-use std::path::PathBuf;
-
-use std::net::{SocketAddr, TcpListener, TcpStream};
-
-use std::cmp::{max, min};
-
-use std::str::from_utf8;
-
-use std::io::{self, Read, Seek};
-
-use std::fs;
-
-use std::format;
-
-use std::collections::HashMap;
-
-use nix::sys::select::{select, FdSet};
-use std::os::unix::{io::AsRawFd, prelude::RawFd};
-
-use std::sync::mpsc;
-
-use std::path::Path;
 
 use http_core::{
     types::{ResponseDataType, SeekableString},
     HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion,
 };
 
-use crate::rendering;
+use std::collections::HashMap;
 
-use boyer_moore_magiclen::BMByte;
+use nix::{
+    sys::select::{select, FdSet},
+    unistd,
+};
+use std::os::unix::{io::AsRawFd, prelude::RawFd};
+
+use std::path::{Path, PathBuf};
+
+use std::{
+    fs,
+    io::{self, Read, Seek},
+    net::{SocketAddr, TcpListener, TcpStream},
+};
+
+use std::sync::mpsc;
+
+use std::cmp::{max, min};
+
+use std::{format, str::from_utf8};
 
 const BUFFER_SIZE: usize = 4096;
 

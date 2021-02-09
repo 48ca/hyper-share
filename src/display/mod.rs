@@ -4,9 +4,6 @@ use crate::opts::types::Opts;
 
 use types::{Connection, ConnectionSet, ControlEvent};
 
-use std::path::Display;
-
-use std::io;
 use termion::{raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -16,19 +13,18 @@ use tui::{
     Terminal,
 };
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+use std::{
+    io,
+    path::Display,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    thread, time,
 };
 
-use std::sync::mpsc;
-
-use std::{thread, time};
-
 use nix::unistd;
-use std::os::unix::io::RawFd;
-
-use std::net::SocketAddr;
+use std::{net::SocketAddr, os::unix::io::RawFd};
 
 fn build_conn_str(addr: &SocketAddr, conn: &mut Connection) -> String {
     let ip_str = match addr {

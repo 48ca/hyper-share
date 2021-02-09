@@ -6,27 +6,27 @@ mod http;
 mod opts;
 mod rendering;
 
-use display::types::{ConnectionSet, ControlEvent};
-
-use display::display;
+use display::{
+    display,
+    types::{ConnectionSet, ControlEvent},
+};
+use http::HttpTui;
+use opts::types::Opts;
 
 use clap::Clap;
-
-use std::{fs::canonicalize, path::Path};
-
-use std::io;
-
-use termion::{event::Key, input::TermRead};
-
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+use std::{
+    fs::canonicalize,
+    io,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    thread,
 };
 
-use crate::opts::types::Opts;
-use http::HttpTui;
 use nix::unistd;
-use std::{sync::mpsc, thread};
+use termion::{event::Key, input::TermRead};
 
 fn main() -> Result<(), io::Error> {
     let opts: Opts = Opts::parse();

@@ -1,10 +1,6 @@
 use crate::http::HttpConnection;
 
-use std::collections::HashMap;
-
-use std::time;
-
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr, time};
 
 pub struct ConnectionSpeedMeasurement {
     speeds: [f32; 3],
