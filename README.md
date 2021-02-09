@@ -26,3 +26,6 @@ HyperShare will listen on `localhost:80` and serve your current working director
 ### Uploading
 
 If enabled with `-u`, HyperShare will accept file uploads via POST requests. The appropriate HTML form is generated in directory listings. Files must be uploaded as `multipart/form-data`.
+
+## Code Formatting
+Use a nightly Rust toolchain to use the required `rustfmt` features.
