@@ -410,10 +410,7 @@ fn main() -> Result<(), io::Error> {
                 Ok(s) => {
                     println!("{}", s);
                 }
-                Err(mpsc::TryRecvError::Empty) => {
-                    break;
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
+                Err(mpsc::TryRecvError::Empty) | Err(mpsc::TryRecvError::Disconnected) => {
                     break;
                 }
             }

@@ -240,10 +240,7 @@ impl HttpTui<'_> {
                     ConnectionState::WritingResponse => {
                         w_fds.insert(*fd);
                     }
-                    ConnectionState::ReadingRequest => {
-                        r_fds.insert(*fd);
-                    }
-                    ConnectionState::ReadingPostBody => {
+                    ConnectionState::ReadingRequest | ConnectionState::ReadingPostBody => {
                         r_fds.insert(*fd);
                     }
                     _ => {}
