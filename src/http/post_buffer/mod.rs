@@ -244,11 +244,11 @@ impl PostBuffer {
                     if let Err(io_e) = fs::remove_file(s) {
                         e.add_error(&PostBufferError::server_error(format!("{:?}", io_e)));
                     }
+                    self.current_filename = None;
+                    self.current_file = None; // close if open
                 }
             }
         };
-        self.current_filename = None;
-        self.current_file = None; // close if open
 
         res
     }
