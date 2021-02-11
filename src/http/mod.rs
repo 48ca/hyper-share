@@ -366,13 +366,18 @@ impl HttpTui<'_> {
                 .map(|(k, _)| k.clone())
                 .collect();
             for fd in to_remove {
+                if let Some(conn) = connections.get(&fd) {
+                    if conn.num_requests == 0 {
+                        self.write_conn_to_history(conn);
+                    }
+                }
                 connections.remove(&fd);
             }
             func(&connections);
         }
     }
 
-    fn write_conn_to_history(&self, conn: &mut HttpConnection) {
+    fn write_conn_to_history(&self, conn: &HttpConnection) {
         if let Ok(peer_addr) = conn.stream.peer_addr() {
             let ip_str = match peer_addr {
                 SocketAddr::V4(addr) => format!("{}:{}", addr.ip(), addr.port()),
@@ -701,6 +706,7 @@ impl HttpTui<'_> {
         mut conn: &mut HttpConnection,
     ) -> Result<ConnectionState, io::Error> {
         let head = &mut conn.buffer[..conn.body_start_location];
+        conn.num_requests += 1;
 
         let req: HttpRequest = match decode_request(head) {
             Ok(r) => r,
@@ -717,7 +723,6 @@ impl HttpTui<'_> {
 
         conn.last_requested_uri = Some(req.path.to_string());
         conn.last_requested_method = req.method.clone();
-        conn.num_requests += 1;
 
         if self.disabled {
             conn.keep_alive = false;
