@@ -117,7 +117,7 @@ impl HttpRequest {
             return Err(HttpStatus::BadRequest);
         }
         let verb = first[0];
-        let path = first[1];
+        let path = ignore_get_params(first[1]);
         let version_str = first[2];
 
         let version = if version_str == "HTTP/1.0" {
@@ -326,3 +326,5 @@ where
     }
     Ok(amt_written)
 }
+
+fn ignore_get_params(path: &str) -> &str { return &path[..path.find('?').unwrap_or(path.len())]; }
