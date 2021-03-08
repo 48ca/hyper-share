@@ -35,6 +35,7 @@ pub enum HttpStatus {
     Continue,                // 100
     OK,                      // 200
     Created,                 // 201
+    MovedPermanently,        // 301
     PartialContent,          // 206
     BadRequest,              // 401
     PermissionDenied,        // 403
@@ -54,6 +55,7 @@ pub fn status_to_code(status: &HttpStatus) -> u16 {
         HttpStatus::Continue => 100,
         HttpStatus::OK => 200,
         HttpStatus::Created => 201,
+        HttpStatus::MovedPermanently => 301,
         HttpStatus::PartialContent => 206,
         HttpStatus::BadRequest => 401,
         HttpStatus::PermissionDenied => 403,
@@ -74,6 +76,7 @@ pub fn status_to_message(status: &HttpStatus) -> &'static str {
         HttpStatus::Continue => "Continue",
         HttpStatus::OK => "OK",
         HttpStatus::Created => "Created",
+        HttpStatus::MovedPermanently => "Moved permanently",
         HttpStatus::PartialContent => "Partial content",
         HttpStatus::BadRequest => "Bad request",
         HttpStatus::PermissionDenied => "Permission denied",

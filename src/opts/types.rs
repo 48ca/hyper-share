@@ -1,7 +1,7 @@
 use clap::Clap;
 
 #[derive(Clap, Clone)]
-#[clap(version = "0.2.0", author = "James Houghton <jhoughton@virginia.edu>")]
+#[clap(version = "0.2.1", author = "James Houghton <jamesthoughton@gmail.com")]
 pub struct Opts {
     #[clap(short, long, default_value = ".")]
     pub directory: String,
@@ -45,4 +45,10 @@ pub struct Opts {
         about = "Disable the index file. Always render directories."
     )]
     pub no_index_file: bool,
+    #[clap(
+        long = "no-slash",
+        about = "When navigating to a directory, hypershare will not try to append a '/' to the \
+                 path."
+    )]
+    pub no_append_slash: bool,
 }

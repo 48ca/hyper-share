@@ -196,6 +196,7 @@ pub struct HttpTui<'a> {
     upload_size_limit: usize,
     index_file: &'a str,
     no_index_file: bool,
+    no_append_slash: bool,
 }
 
 impl HttpTui<'_> {
@@ -219,6 +220,7 @@ impl HttpTui<'_> {
             upload_size_limit: opts.size_limit,
             index_file: &opts.index_file,
             no_index_file: opts.no_index_file,
+            no_append_slash: opts.no_append_slash,
         })
     }
 
@@ -590,32 +592,41 @@ impl HttpTui<'_> {
             }
         };
 
-        let metadata = {
-            let md = match fs::metadata(&canonical_path) {
-                Err(error) => {
-                    return match resolve_io_error(&error) {
-                        Some(http_error) => {
-                            Ok(HttpResult::Error(http_error, Some(error.to_string())))
-                        }
-                        None => Err(error),
-                    };
+        let original_metadata = match fs::metadata(&canonical_path) {
+            Err(error) => {
+                return match resolve_io_error(&error) {
+                    Some(http_error) => Ok(HttpResult::Error(http_error, Some(error.to_string()))),
+                    None => Err(error),
+                };
+            }
+            Ok(data) => data,
+        };
+
+        if !self.no_append_slash {
+            if normalized_path.len() > 0
+                && original_metadata.is_dir()
+                && !normalized_path.ends_with('/')
+            {
+                let mut resp = HttpResponse::new(HttpStatus::MovedPermanently, &req.version);
+                resp.add_header("Location".to_string(), format!("/{}/", normalized_path));
+                resp.add_header("Server".to_string(), format!("hypershare"));
+                return Ok(HttpResult::Response(resp, 0));
+            }
+        }
+
+        // If we are a directory, attempt to find the index file.
+        // If it's not there, just render the directory.
+        let metadata = if original_metadata.is_dir() && !self.no_index_file {
+            canonical_path.push(self.index_file);
+            match fs::metadata(&canonical_path) {
+                Err(_error) => {
+                    canonical_path.pop();
+                    original_metadata
                 }
                 Ok(data) => data,
-            };
-            // If we are a directory, attempt to find the index file.
-            // If it's not there, just render the directory.
-            if md.is_dir() && !self.no_index_file {
-                canonical_path.push(self.index_file);
-                match fs::metadata(&canonical_path) {
-                    Err(_error) => {
-                        canonical_path.pop();
-                        md
-                    }
-                    Ok(data) => data,
-                }
-            } else {
-                md
             }
+        } else {
+            original_metadata
         };
 
         if !metadata.is_file() && !metadata.is_dir() {
