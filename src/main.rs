@@ -39,12 +39,7 @@ fn main() -> Result<(), io::Error> {
         }
     };
 
-    if opts.start_disabled && opts.headless {
-        println!(
-            "Warning: --start-disabled and --headless have both been specified. The server will \
-             remain disabled, as there is no way to enable it while running headless."
-        );
-    }
+    opts::verify_opts(&opts);
 
     let (hist_tx, hist_rx) = mpsc::channel();
 
