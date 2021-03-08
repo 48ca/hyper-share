@@ -1,6 +1,6 @@
 use clap::Clap;
 
-#[derive(Clap)]
+#[derive(Clap, Clone)]
 #[clap(version = "0.2.0", author = "James Houghton <jhoughton@virginia.edu>")]
 pub struct Opts {
     #[clap(short, long, default_value = ".")]
@@ -34,4 +34,15 @@ pub struct Opts {
         default_value = "0"
     )]
     pub size_limit: usize,
+    #[clap(
+        long = "index-file",
+        about = "Index page filename. When rendering a directory, render this file instead.",
+        default_value = "index.html"
+    )]
+    pub index_file: String,
+    #[clap(
+        long = "no-index-file",
+        about = "Disable the index file. Always render directories."
+    )]
+    pub no_index_file: bool,
 }

@@ -90,7 +90,7 @@ pub fn display(
     rx: mpsc::Receiver<ControlEvent>,
     needs_update: &AtomicBool,
     write_end: RawFd,
-    opts: Opts,
+    opts: &Opts,
 ) -> Result<(), io::Error> {
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = AlternateScreen::from(stdout);

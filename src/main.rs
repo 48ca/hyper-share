@@ -48,16 +48,7 @@ fn main() -> Result<(), io::Error> {
 
     let (hist_tx, hist_rx) = mpsc::channel();
 
-    let mut tui = match HttpTui::new(
-        &opts.hostmask,
-        opts.port,
-        &canon_path.as_path(),
-        hist_tx,
-        !opts.disable_directory_listings,
-        opts.start_disabled,
-        opts.uploading_enabled,
-        opts.size_limit,
-    ) {
+    let mut tui = match HttpTui::new(&canon_path.as_path(), hist_tx, &opts) {
         Ok(tui) => tui,
         Err(e) => {
             eprintln!("Failed to bind to port {}: {}", opts.port, e);
@@ -83,6 +74,7 @@ fn main() -> Result<(), io::Error> {
 
         let connection_set_ptr = connection_set.clone();
         let canon_path = canon_path.clone();
+        let opts_c = opts.clone();
         let thd = thread::spawn(move || {
             match display(
                 canon_path.display(),
@@ -90,7 +82,7 @@ fn main() -> Result<(), io::Error> {
                 rx,
                 &needs_update_clone,
                 write_end,
-                opts,
+                &opts_c,
             ) {
                 Err(e) => {
                     eprintln!("Got io::Error while displaying: {}", e);

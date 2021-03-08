@@ -7,6 +7,8 @@ use boyer_moore_magiclen::BMByte;
 use crate::rendering;
 use post_buffer::PostBuffer;
 
+use crate::opts::types::Opts;
+
 use http_core::{
     types::{ResponseDataType, SeekableString},
     HttpMethod, HttpRequest, HttpResponse, HttpStatus, HttpVersion,
@@ -192,28 +194,31 @@ pub struct HttpTui<'a> {
     disabled: bool,
     uploading: bool,
     upload_size_limit: usize,
+    index_file: &'a str,
+    no_index_file: bool,
 }
 
 impl HttpTui<'_> {
     pub fn new<'a>(
-        host: &str,
-        port: u16,
         root_dir: &'a Path,
         sender: mpsc::Sender<String>,
-        dir_listings: bool,
-        disabled: bool,
-        uploading: bool,
-        upload_size_limit: usize,
+        opts: &'a Opts,
     ) -> Result<HttpTui<'a>, io::Error> {
-        let listener = TcpListener::bind(format!("{mask}:{port}", mask = host, port = port))?;
+        let listener = TcpListener::bind(format!(
+            "{mask}:{port}",
+            mask = &opts.hostmask,
+            port = &opts.port
+        ))?;
         Ok(HttpTui {
             listener: listener,
             root_dir: root_dir,
             history_channel: sender,
-            dir_listings: dir_listings,
-            disabled: disabled,
-            uploading: uploading,
-            upload_size_limit: upload_size_limit,
+            dir_listings: !opts.disable_directory_listings,
+            disabled: opts.start_disabled,
+            uploading: opts.uploading_enabled,
+            upload_size_limit: opts.size_limit,
+            index_file: &opts.index_file,
+            no_index_file: opts.no_index_file,
         })
     }
 
@@ -575,7 +580,7 @@ impl HttpTui<'_> {
         };
 
         let path = self.root_dir.join(normalized_path);
-        let canonical_path = match get_and_check_canon_path(&self.root_dir, path)? {
+        let mut canonical_path = match get_and_check_canon_path(&self.root_dir, path)? {
             Some(path) => path,
             None => {
                 return Ok(HttpResult::Error(
@@ -585,14 +590,32 @@ impl HttpTui<'_> {
             }
         };
 
-        let metadata = match fs::metadata(&canonical_path) {
-            Err(error) => {
-                return match resolve_io_error(&error) {
-                    Some(http_error) => Ok(HttpResult::Error(http_error, Some(error.to_string()))),
-                    None => Err(error),
-                };
+        let metadata = {
+            let md = match fs::metadata(&canonical_path) {
+                Err(error) => {
+                    return match resolve_io_error(&error) {
+                        Some(http_error) => {
+                            Ok(HttpResult::Error(http_error, Some(error.to_string())))
+                        }
+                        None => Err(error),
+                    };
+                }
+                Ok(data) => data,
+            };
+            // If we are a directory, attempt to find the index file.
+            // If it's not there, just render the directory.
+            if md.is_dir() && !self.no_index_file {
+                canonical_path.push(self.index_file);
+                match fs::metadata(&canonical_path) {
+                    Err(_error) => {
+                        canonical_path.pop();
+                        md
+                    }
+                    Ok(data) => data,
+                }
+            } else {
+                md
             }
-            Ok(data) => data,
         };
 
         if !metadata.is_file() && !metadata.is_dir() {
