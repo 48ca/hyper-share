@@ -5,6 +5,7 @@ mod display;
 mod http;
 mod opts;
 mod rendering;
+mod term;
 
 use display::{
     display,
@@ -59,7 +60,8 @@ fn main() -> Result<(), io::Error> {
         }
     };
 
-    if !opts.headless {
+    let smart_terminal = term::check_terminal();
+    if smart_terminal && !opts.headless {
         let connection_set = Arc::new(Mutex::new(ConnectionSet::new()));
         let connection_set_needs_update = Arc::new(AtomicBool::new(false));
 
@@ -137,6 +139,9 @@ fn main() -> Result<(), io::Error> {
         let _ = thd.join();
         let _ = keys.join();
     } else {
+        if !opts.headless {
+            println!("Warning: terminal is dumb, switching to headless.");
+        }
         println!("Listening on {}:{}", opts.hostmask, opts.port);
         tui.run(read_end, move |_connections| loop {
             match hist_rx.try_recv() {
